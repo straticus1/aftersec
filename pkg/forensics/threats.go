@@ -26,6 +26,8 @@ func (t ThreatScore) String() string {
 type ProcessFinding struct {
 	PID         int
 	Command     string
+	Path        string
+	NetCount    int
 	User        string
 	Score       ThreatScore
 	Reason      string
@@ -42,7 +44,15 @@ func containsAny(s string, substrs ...string) bool {
 }
 
 // CheckSignature evaluates a command execution against known threat intelligence heuristics.
-func CheckSignature(cmd string) (ThreatScore, string) {
+func CheckSignature(cmd string, path string, netCount int) (ThreatScore, string) {
+	// 0. Path & Connection Anomalies (Bypassing command-line obfuscation)
+	if path != "" && (strings.HasPrefix(path, "/tmp/") || strings.HasPrefix(path, "/var/tmp/") || strings.Contains(path, "/.Trash/")) {
+		if netCount > 0 {
+			return Malicious, "Executable running from ephemeral storage with open network connections."
+		}
+		return Suspicious, "Executable running from ephemeral storage."
+	}
+	
 	// 1. Cryptocurrency Miners
 	if containsAny(cmd, "xmrig", "minergate", "cgminer", "stratum+tcp://") {
 		return Malicious, "Known cryptocurrency mining signature detected in memory."

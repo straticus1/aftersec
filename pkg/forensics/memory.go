@@ -39,13 +39,19 @@ func ScanRunningProcesses() ([]ProcessFinding, error) {
 		}
 
 		pid, _ := strconv.Atoi(pidStr)
-		score, reason := CheckSignature(cmdStr)
+		
+		path, _ := GetProcessPath(pid)
+		netCount, _ := GetOpenConnections(pid)
+		
+		score, reason := CheckSignature(cmdStr, path, netCount)
 
 		if score > Safe {
 			anomalies = append(anomalies, ProcessFinding{
 				PID:         pid,
 				User:        userStr,
 				Command:     cmdStr,
+				Path:        path,
+				NetCount:    netCount,
 				Score:       score,
 				Reason:      reason,
 				KillCommand: fmt.Sprintf("kill -9 %d", pid),
