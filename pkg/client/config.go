@@ -44,9 +44,11 @@ type SchedulingConfig struct {
 }
 
 type ResourceConfig struct {
-	MaxCPUPercent  int  `yaml:"max_cpu_percent"`
-	MaxMemoryMB    int  `yaml:"max_memory_mb"`
-	PauseOnBattery bool `yaml:"pause_on_battery"`
+	MaxCPUPercent  int    `yaml:"max_cpu_percent"`
+	MaxMemoryMB    int    `yaml:"max_memory_mb"`
+	PauseOnBattery bool   `yaml:"pause_on_battery"`
+	MaxWorkers     int    `yaml:"max_workers"`
+	Priority       string `yaml:"priority"`
 }
 
 type AlertConfig struct {
@@ -58,11 +60,17 @@ type RemediationConfig struct {
 	AutoRemediate bool `yaml:"auto_remediate"`
 }
 
+type AIConfig struct {
+	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`
+}
+
 type DaemonConfig struct {
 	Scheduling  SchedulingConfig  `yaml:"scheduling"`
 	Resources   ResourceConfig    `yaml:"resources"`
 	Alerts      AlertConfig       `yaml:"alerts"`
 	Remediation RemediationConfig `yaml:"remediation"`
+	AI          AIConfig          `yaml:"ai"`
 }
 
 // ClientConfig represents the client-side configuration
@@ -97,6 +105,8 @@ func DefaultClientConfig() *ClientConfig {
 				MaxCPUPercent:  25,
 				MaxMemoryMB:    500,
 				PauseOnBattery: true,
+				MaxWorkers:     2,
+				Priority:       "background",
 			},
 			Alerts: AlertConfig{
 				AlertOnCritical: true,
@@ -104,6 +114,10 @@ func DefaultClientConfig() *ClientConfig {
 			},
 			Remediation: RemediationConfig{
 				AutoRemediate: false,
+			},
+			AI: AIConfig{
+				Provider: "gemini",
+				Model:    "gemini-2.5-flash",
 			},
 		},
 		Core: *core.DefaultConfig(),

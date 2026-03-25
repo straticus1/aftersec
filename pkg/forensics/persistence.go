@@ -12,6 +12,7 @@ type PersistenceFinding struct {
 	PlistPath   string
 	Program     string
 	IsHidden    bool
+	Authority   string
 	ThreatScore ThreatScore
 	Reason      string
 }
@@ -81,11 +82,35 @@ func ScanPersistenceMechanisms() ([]PersistenceFinding, error) {
 				reasons = append(reasons, "Persistent payload runs from volatile temporary space")
 			}
 			
+			sigInfo, err := VerifySignature(program)
+			var authority string
+			if err == nil {
+				if sigInfo.Valid {
+					authority = sigInfo.Authority
+					if sigInfo.TeamID == "" && !strings.Contains(sigInfo.Authority, "Software Signing") {
+						// Ad-hoc signed or non-standard Apple signature without TeamID
+						if score < Suspicious {
+							score = Suspicious
+						}
+						reasons = append(reasons, "Binary is ad-hoc signed or lacks a valid Team ID")
+					}
+				} else {
+					authority = "Unsigned"
+					if score < Suspicious {
+						score = Suspicious
+					}
+					reasons = append(reasons, "Binary is completely unsigned")
+				}
+			} else {
+				authority = "Unknown (Error checking signature)"
+			}
+
 			if score > Safe {
 				findings = append(findings, PersistenceFinding{
 					PlistPath:   fullPath,
 					Program:     program,
 					IsHidden:    isHidden,
+					Authority:   authority,
 					ThreatScore: score,
 					Reason:      strings.Join(reasons, "; "),
 				})

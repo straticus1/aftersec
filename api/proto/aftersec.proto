@@ -42,7 +42,7 @@ message ClientEvent {
   string tenant_id = 1;
   string hardware_id = 2;
   int64 timestamp = 3;
-  string event_type = 4; // "SYSCALL", "FILE_MOD", "NETWORK_CONN"
+  string event_type = 4; // "SYSCALL", "FILE_MOD", "NETWORK_CONN", "PROCESS_EXEC", "PROCESS_EXIT"
   string process_name = 5;
   int32 process_id = 6;
   string payload = 7; // JSON encoded details

@@ -1,9 +1,11 @@
 package plugins
 
 import (
+	"aftersec/pkg/ai"
 	"aftersec/pkg/core"
 	"aftersec/pkg/forensics"
 	"aftersec/pkg/tuning"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -169,6 +171,54 @@ func ScanStarlark(addFinding func(core.Finding)) {
 			})
 		}
 
+		aiAnalyzeThreat := starlark.NewBuiltin("ai_analyze_threat", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+			var telemetry string
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "telemetry", &telemetry); err != nil { return nil, err }
+			analysis, err := ai.AnalyzeThreat(context.Background(), telemetry)
+			if err != nil { return nil, err }
+			return starlark.String(analysis), nil
+		})
+
+		verifySignature := starlark.NewBuiltin("verify_signature", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+			var filePath string
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &filePath); err != nil { return nil, err }
+			info, err := forensics.VerifySignature(filePath)
+			if err != nil { return nil, err }
+			dict := starlark.NewDict(3)
+			dict.SetKey(starlark.String("valid"), starlark.Bool(info.Valid))
+			dict.SetKey(starlark.String("authority"), starlark.String(info.Authority))
+			dict.SetKey(starlark.String("team_id"), starlark.String(info.TeamID))
+			return dict, nil
+		})
+
+		analyzeBinary := starlark.NewBuiltin("ai_analyze_binary", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+			var filePath string
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &filePath); err != nil { return nil, err }
+			out, _ := exec.Command("strings", filePath).CombinedOutput()
+			strOut := string(out)
+			if len(strOut) > 4000 { strOut = strOut[:4000] }
+			analysis, err := ai.AnalyzeBinarySemantics(context.Background(), strOut)
+			if err != nil { return nil, err }
+			return starlark.String(analysis), nil
+		})
+
+		deployHoneypot := starlark.NewBuiltin("deploy_honeypot", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+			var decoyType, destPath string
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "type", &decoyType, "path", &destPath); err != nil { return nil, err }
+			content, err := ai.GenerateHoneypotContent(context.Background(), decoyType)
+			if err != nil { return nil, err }
+			if err := os.WriteFile(destPath, []byte(content), 0644); err != nil { return nil, err }
+			return starlark.String("Honeypot Deployed"), nil
+		})
+
+		aiSwarm := starlark.NewBuiltin("ai_swarm_judge", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+			var telemetry string
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "telemetry", &telemetry); err != nil { return nil, err }
+			analysis, err := ai.AnalyzeThreatSwarm(context.Background(), telemetry)
+			if err != nil { return nil, err }
+			return starlark.String(analysis), nil
+		})
+
 		env := starlark.StringDict{
 			"run_command":    runCmd,
 			"report_finding": reportFinding,
@@ -180,6 +230,11 @@ func ScanStarlark(addFinding func(core.Finding)) {
 			"flush_dns":      simpleTool("flush_dns", tuning.FlushDNS),
 			"clear_caches":   simpleTool("clear_caches", tuning.ClearSystemCaches),
 			"empty_trash":    simpleTool("empty_trash", tuning.EmptyTrash),
+			"ai_analyze_threat": aiAnalyzeThreat,
+			"verify_signature":  verifySignature,
+			"ai_analyze_binary": analyzeBinary,
+			"deploy_honeypot":   deployHoneypot,
+			"ai_swarm_judge":    aiSwarm,
 		}
 
 		_, err = starlark.ExecFile(thread, path, nil, env)
