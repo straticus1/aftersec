@@ -602,7 +602,7 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## 📝 License
 
-Copyright © 2024 AfterSec
+Copyright © 2026 AfterSec by After Dark Systems, LLC
 
 This is proprietary software. See [LICENSE](LICENSE) for details.
 
@@ -631,19 +631,19 @@ For commercial licensing inquiries: licensing@aftersec.io
 
 ## 🗺️ Roadmap
 
-### v1.1 (Q2 2024)
+### v1.1 (Q2 2026)
 - [ ] Real-time WebSocket dashboard updates
 - [ ] API documentation (OpenAPI/Swagger)
 - [ ] E2E testing with Playwright
 - [ ] Advanced RBAC with Casbin
 
-### v1.2 (Q3 2024)
+### v1.2 (Q3 2026)
 - [ ] SSO integration (SAML, OAuth2, LDAP)
 - [ ] Compliance reporting (CIS, NIST, SOC2)
 - [ ] Kubernetes Helm charts
 - [ ] Windows Defender integration
 
-### v2.0 (Q4 2024)
+### v2.0 (Q4 2026)
 - [ ] GraphQL API layer
 - [ ] Multi-region deployment
 - [ ] Machine learning threat models
