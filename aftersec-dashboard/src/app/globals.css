@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0a0a0a;
+  --foreground: #ededed;
 }
 
 @theme inline {
@@ -12,11 +12,34 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Default Dark Theme (High Contrast) - Default for accessibility */
+[data-theme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --gray-950: #030712;
+  --gray-900: #111827;
+  --gray-800: #1f2937;
+  --gray-700: #374151;
+}
+
+/* Dark Blue Theme (Alternative Dark) */
+[data-theme="dark-blue"] {
+  --background: #0f1419;
+  --foreground: #e3e8ef;
+  --gray-950: #0a0e13;
+  --gray-900: #1a1f2e;
+  --gray-800: #252b3b;
+  --gray-700: #2f3747;
+}
+
+/* Pure Black Theme (OLED, Maximum Contrast) */
+[data-theme="pure-black"] {
+  --background: #000000;
+  --foreground: #ffffff;
+  --gray-950: #000000;
+  --gray-900: #0d0d0d;
+  --gray-800: #1a1a1a;
+  --gray-700: #262626;
 }
 
 body {

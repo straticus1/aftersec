@@ -13,6 +13,8 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+import LayoutClient from "@/components/LayoutClient";
+
 export const metadata: Metadata = {
   title: "AfterSec Dashboard - Enterprise Security Posture Management",
   description: "Monitor and manage your organization's security posture in real-time",
@@ -28,9 +30,14 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
-        <Providers>{children}</Providers>
+      <body className="min-h-full flex bg-gray-950 text-white overflow-hidden">
+        <Providers>
+          <LayoutClient>
+            {children}
+          </LayoutClient>
+        </Providers>
       </body>
     </html>
   );
 }
+
