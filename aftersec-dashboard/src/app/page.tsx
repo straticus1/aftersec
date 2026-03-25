@@ -10,6 +10,7 @@ import RollbackModal from '@/components/RollbackModal';
 import ExportMenu from '@/components/ExportMenu';
 import FilterBar from '@/components/FilterBar';
 import { useFilters, filterHelpers } from '@/lib/hooks/useFilters';
+import DarkWebAlertsWidget from '@/components/DarkWebAlertsWidget';
 
 export default function Home() {
   const { currentTenant } = useTenant();
@@ -119,7 +120,7 @@ export default function Home() {
         <StatCard title="Overall Score" value="92/100" trend="+2" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         <section className="bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-xl">
           <h2 className="text-lg font-semibold text-white mb-6">Security Posture Trend</h2>
           <PostureTrendChart />
@@ -128,6 +129,7 @@ export default function Home() {
           <h2 className="text-lg font-semibold text-white mb-6">Threat Distribution</h2>
           <ThreatDistributionChart />
         </section>
+        <DarkWebAlertsWidget />
       </div>
 
       <FilterBar

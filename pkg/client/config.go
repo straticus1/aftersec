@@ -65,12 +65,25 @@ type AIConfig struct {
 	Model    string `yaml:"model"`
 }
 
+type ThreatIntelConfig struct {
+	Enabled             bool     `yaml:"enabled"`
+	DarkAPIKey          string   `yaml:"darkapi_key"`
+	CheckCredentials    bool     `yaml:"check_credentials"`
+	CheckFileHashes     bool     `yaml:"check_file_hashes"`
+	CheckNetworkIOCs    bool     `yaml:"check_network_iocs"`
+	MonitorDarkWeb      bool     `yaml:"monitor_dark_web"`
+	DarkWebKeywords     []string `yaml:"darkweb_keywords"`
+	OrganizationDomain  string   `yaml:"organization_domain"`
+	CredentialCheckFreq string   `yaml:"credential_check_freq"` // daily, weekly, monthly
+}
+
 type DaemonConfig struct {
-	Scheduling  SchedulingConfig  `yaml:"scheduling"`
-	Resources   ResourceConfig    `yaml:"resources"`
-	Alerts      AlertConfig       `yaml:"alerts"`
-	Remediation RemediationConfig `yaml:"remediation"`
-	AI          AIConfig          `yaml:"ai"`
+	Scheduling   SchedulingConfig  `yaml:"scheduling"`
+	Resources    ResourceConfig    `yaml:"resources"`
+	Alerts       AlertConfig       `yaml:"alerts"`
+	Remediation  RemediationConfig `yaml:"remediation"`
+	AI           AIConfig          `yaml:"ai"`
+	ThreatIntel  ThreatIntelConfig `yaml:"threat_intel"`
 }
 
 // ClientConfig represents the client-side configuration
@@ -118,6 +131,15 @@ func DefaultClientConfig() *ClientConfig {
 			AI: AIConfig{
 				Provider: "gemini",
 				Model:    "gemini-2.5-flash",
+			},
+			ThreatIntel: ThreatIntelConfig{
+				Enabled:             false, // Disabled by default, requires API key
+				CheckCredentials:    true,
+				CheckFileHashes:     true,
+				CheckNetworkIOCs:    true,
+				MonitorDarkWeb:      false, // Opt-in due to API costs
+				DarkWebKeywords:     []string{},
+				CredentialCheckFreq: "weekly",
 			},
 		},
 		Core: *core.DefaultConfig(),

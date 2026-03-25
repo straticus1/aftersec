@@ -130,3 +130,90 @@ func GenerateHoneypotContent(ctx context.Context, decoyType string) (string, err
 	if err != nil { return "", err }
 	return resp.Text(), nil
 }
+
+// AnalyzeThreatWithIntelligence enhances threat analysis with dark web threat intelligence context
+func AnalyzeThreatWithIntelligence(ctx context.Context, threatJSON string, darkWebContext string) (string, error) {
+	if g == nil {
+		return "", fmt.Errorf("Genkit flow not initialized")
+	}
+
+	prompt := fmt.Sprintf(`You are a macOS security analyst with access to dark web threat intelligence. Analyze the following security telemetry finding in the context of known breaches, malware hashes, and C2 servers from the dark web.
+
+LOCAL TELEMETRY:
+%s
+
+DARK WEB INTELLIGENCE CONTEXT:
+%s
+
+Provide:
+1. A concise threat assessment (2-3 sentences)
+2. Correlation confidence score (0-100%%) based on dark web intelligence
+3. Attribution (if IOCs match known threat actors)
+4. Exact macOS terminal remediation command
+
+Format your response like this:
+Threat Assessment: <analysis>
+Confidence: <score>%%
+Attribution: <threat actor or "Unknown">
+
+Remediation:
+`+"```bash\n<command>\n```", threatJSON, darkWebContext)
+
+	response, err := genkit.Generate(ctx, g,
+		ai.WithModelName(activeModel),
+		ai.WithPrompt(prompt),
+	)
+	if err != nil {
+		return "", err
+	}
+	return response.Text(), nil
+}
+
+// AnalyzeThreatSwarmWithIntelligence runs multi-LLM analysis with dark web intelligence context
+func AnalyzeThreatSwarmWithIntelligence(ctx context.Context, threatJSON string, darkWebContext string) (string, error) {
+	if g == nil {
+		return "", fmt.Errorf("Genkit not initialized")
+	}
+
+	basePrompt := fmt.Sprintf(`Analyze this security threat with dark web intelligence context:
+
+TELEMETRY: %s
+
+DARK WEB INTEL: %s
+
+Provide threat assessment, confidence score, and attribution.`, threatJSON, darkWebContext)
+
+	opinions := ""
+
+	if os.Getenv("OPENAI_API_KEY") != "" {
+		resp, _ := genkit.Generate(ctx, g, ai.WithModelName("gpt-4o-mini"), ai.WithPrompt(basePrompt))
+		if resp != nil {
+			opinions += "ChatGPT Analysis: " + resp.Text() + "\n\n"
+		}
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+		resp, _ := genkit.Generate(ctx, g, ai.WithModelName("claude-3-5-sonnet-latest"), ai.WithPrompt(basePrompt))
+		if resp != nil {
+			opinions += "Claude Analysis: " + resp.Text() + "\n\n"
+		}
+	}
+	if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_GENAI_API_KEY") != "" {
+		resp, _ := genkit.Generate(ctx, g, ai.WithModelName("gemini-2.5-flash"), ai.WithPrompt(basePrompt))
+		if resp != nil {
+			opinions += "Gemini Analysis: " + resp.Text() + "\n\n"
+		}
+	}
+
+	judgePrompt := fmt.Sprintf(`You are the Chief Security Officer. Review these independent LLM AI triage reports that incorporate dark web threat intelligence. Synthesize a final, definitive threat judgment with confidence score and attribution. End with Bash remediation sequence.
+
+Reports:
+%s
+
+CRITICAL: The dark web intelligence provides IOCs (Indicators of Compromise) - if the telemetry matches known malware hashes, C2 IPs, or breached credentials, state this explicitly and raise confidence accordingly.`, opinions)
+
+	finalResp, err := genkit.Generate(ctx, g, ai.WithModelName(activeModel), ai.WithPrompt(judgePrompt))
+	if err != nil {
+		return "", err
+	}
+	return finalResp.Text(), nil
+}
