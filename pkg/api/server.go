@@ -1,7 +1,7 @@
 package api
 
 import (
-	"aftersec/pkg/storage"
+	"aftersec/pkg/client/storage"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -9,12 +9,7 @@ import (
 	"strings"
 )
 
-func StartServer(port int) error {
-	mgr, err := storage.NewManager()
-	if err != nil {
-		return fmt.Errorf("failed to initialize storage: %w", err)
-	}
-
+func StartServer(port int, mgr storage.Manager) error {
 	cfg, err := mgr.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -54,11 +49,6 @@ func StartServer(port int) error {
 	})
 
 	http.HandleFunc("/api/v1/posture", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		mgr, err := storage.NewManager()
-		if err != nil {
-			http.Error(w, `{"error":"storage unavailable"}`, http.StatusInternalServerError)
-			return
-		}
 		latest, err := mgr.GetLatest()
 		if err != nil || latest == nil {
 			http.Error(w, `{"error":"no baseline found"}`, http.StatusNotFound)

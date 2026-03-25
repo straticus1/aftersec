@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package aftersec.api;
+
+option go_package = "aftersec/pkg/api/grpc;grpcapi";
+
+service EnterpriseService {
+  rpc Enroll (EnrollRequest) returns (EnrollResponse);
+  rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+  rpc StreamEvents (stream ClientEvent) returns (StreamAck);
+  rpc ConnectCommandStream (stream CommandResult) returns (stream ServerCommand);
+}
+
+message EnrollRequest {
+  string hardware_id = 1;
+  string hostname = 2;
+  string os_version = 3;
+  string agent_version = 4;
+}
+
+message EnrollResponse {
+  string tenant_id = 1;
+  string access_token = 2;
+  bool success = 3;
+  string message = 4;
+}
+
+message HeartbeatRequest {
+  string tenant_id = 1;
+  string hardware_id = 2;
+  string status = 3;
+  int64 timestamp = 4;
+}
+
+message HeartbeatResponse {
+  bool policy_updated = 1;
+  string new_policy_hash = 2;
+  string action = 3; // "NONE", "RESTART", "UPDATE", "QUARANTINE", "LOCK_SCREEN", "WIPE_DATA"
+}
+
+message ClientEvent {
+  string tenant_id = 1;
+  string hardware_id = 2;
+  int64 timestamp = 3;
+  string event_type = 4; // "SYSCALL", "FILE_MOD", "NETWORK_CONN"
+  string process_name = 5;
+  int32 process_id = 6;
+  string payload = 7; // JSON encoded details
+}
+
+message StreamAck {
+  int32 events_processed = 1;
+  string message = 2;
+}
+
+message CommandResult {
+  string tenant_id = 1;
+  string hardware_id = 2;
+  string command_id = 3;
+  string status = 4; // "ACK", "SUCCESS", "FAILED"
+  string output = 5;
+}
+
+message ServerCommand {
+  string command_id = 1;
+  string action = 2; // "EXEC", "REMEDIATE", "LOCK_SCREEN", "WIPE_DATA", "QUARANTINE"
+  string payload = 3;
+}

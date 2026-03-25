@@ -1,0 +1,30 @@
+FROM node:20-alpine AS base
+
+FROM base AS deps
+WORKDIR /app
+COPY aftersec-dashboard/package.json aftersec-dashboard/package-lock.json ./
+RUN npm ci
+
+FROM base AS builder
+WORKDIR /app
+COPY aftersec-dashboard .
+COPY --from=deps /app/node_modules ./node_modules
+# Enable standalone output in next.config.ts if not set, or just run next build
+# Assuming standard build
+RUN npm run build
+
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV production
+# Assuming output: standalone might not be explicitly configured, copy all files for a standard start
+COPY --from=builder /app/next.config.ts ./
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+
+EXPOSE 3000
+
+ENV PORT 3000
+CMD ["npm", "start"]
