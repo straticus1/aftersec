@@ -146,11 +146,6 @@ func (rd *RootkitDetector) scanLoadedKEXTs() ([]RootkitFinding, error) {
 
 		bundleID := fields[5]
 
-		// Check if KEXT is trusted
-		rd.mu.RLock()
-		trusted := rd.trustedKEXTs[bundleID]
-		rd.mu.RUnlock()
-
 		// Check for suspicious characteristics
 		var threatScore float64
 		evidence := make(map[string]interface{})

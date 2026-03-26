@@ -175,9 +175,7 @@ func (ba *BehavioralAnalyticsEngine) AnalyzeEvent(event edr.ProcessEvent) (*Beha
 
 // extractFeatures extracts behavioral features from an event
 func (ba *BehavioralAnalyticsEngine) extractFeatures(event edr.ProcessEvent) *BehavioralFeatures {
-	features := &BehavioralFeatures{
-		Timestamp: event.Timestamp,
-	}
+	features := &BehavioralFeatures{}
 
 	// Process chain analysis
 	features.ProcessChainDepth = ba.getProcessChainDepth(event.PID)

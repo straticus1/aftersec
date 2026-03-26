@@ -2,7 +2,6 @@ package forensics
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"os/exec"
@@ -257,15 +256,14 @@ func (mf *MemoryForensicsEngine) extractAndAnalyzeStrings(pid int, processName, 
 	}
 
 	// Extract printable strings (ASCII 32-126)
-	strings := extractStrings(content, 8) // Minimum string length of 8
+	extractedStrings := extractStrings(content, 8) // Minimum string length of 8
 
 	// Regex patterns for IOCs
 	urlPattern := regexp.MustCompile(`https?://[a-zA-Z0-9\.\-]+(?:/[^\s]*)?`)
 	ipPattern := regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`)
-	emailPattern := regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
 	keyPattern := regexp.MustCompile(`(?i)(api[_\-]?key|secret|token|password)\s*[:=]\s*[a-zA-Z0-9\-_\.]+`)
 
-	for _, str := range strings {
+	for _, str := range extractedStrings {
 		// Check for URLs (potential C2 or exfiltration endpoints)
 		if urlPattern.MatchString(str) {
 			findings = append(findings, MemoryFinding{
