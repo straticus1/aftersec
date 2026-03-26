@@ -126,7 +126,7 @@ func parseThreatSeverity(severity string) ThreatLevel {
 	}
 }
 
-// getEnabledEngines returns a list of enabled engine names
+// getEnabledEngines returns a list of enabled engine names (internal)
 func (c *Client) getEnabledEngines() []string {
 	var engines []string
 
@@ -144,6 +144,11 @@ func (c *Client) getEnabledEngines() []string {
 	}
 
 	return engines
+}
+
+// GetEnabledEngines returns a list of enabled engine names (public)
+func (c *Client) GetEnabledEngines() []string {
+	return c.getEnabledEngines()
 }
 
 // IsEnabled returns whether DarkScan integration is enabled

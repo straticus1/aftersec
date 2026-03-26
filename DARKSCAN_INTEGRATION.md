@@ -148,9 +148,13 @@ aftersec malware-scan --update malware.bin
 
 # Scan an app bundle
 aftersec malware-scan /Applications/Suspicious.app
+
+# JSON output for automation
+aftersec malware-scan --output json /path/to/file
+aftersec malware-scan -o json -r /Downloads
 ```
 
-**Output Example:**
+**Text Output Example:**
 ```
 🛡️  AfterSec DarkScan Multi-Engine Malware Scanner
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -171,6 +175,91 @@ Threat Level: 🔴 HIGH
 2. [YARA] Suspicious_PE_Characteristics
    Severity: medium
    Description: PE file contains suspicious characteristics
+```
+
+**JSON Output Example (File Scan):**
+```json
+{
+  "success": true,
+  "data": {
+    "file_path": "/path/to/file",
+    "infected": true,
+    "threat_level": "HIGH",
+    "threats": [
+      {
+        "name": "Win.Trojan.Generic-12345",
+        "severity": "high",
+        "description": "Generic trojan detected",
+        "engine": "ClamAV"
+      },
+      {
+        "name": "Suspicious_PE_Characteristics",
+        "severity": "medium",
+        "description": "PE file contains suspicious characteristics",
+        "engine": "YARA"
+      }
+    ],
+    "scan_duration": "1.2s"
+  }
+}
+```
+
+**JSON Output Example (Directory Scan):**
+```json
+{
+  "success": true,
+  "data": {
+    "target_path": "/Downloads",
+    "recursive": true,
+    "total_files": 150,
+    "infected_files": 2,
+    "total_threats": 3,
+    "results": [
+      {
+        "file_path": "/Downloads/malware.exe",
+        "infected": true,
+        "threat_level": "DETECTED",
+        "threats": [
+          {
+            "name": "Win.Trojan.Generic",
+            "severity": "high",
+            "description": "Generic trojan",
+            "engine": "ClamAV"
+          }
+        ]
+      },
+      {
+        "file_path": "/Downloads/suspicious.bin",
+        "infected": true,
+        "threat_level": "DETECTED",
+        "threats": [
+          {
+            "name": "Backdoor.Generic",
+            "severity": "critical",
+            "description": "Backdoor detected",
+            "engine": "YARA"
+          },
+          {
+            "name": "Network.C2.Communication",
+            "severity": "high",
+            "description": "Command and control communication",
+            "engine": "CAPA"
+          }
+        ]
+      }
+    ],
+    "scan_duration": "45.3s",
+    "engines": ["ClamAV", "YARA", "CAPA"]
+  }
+}
+```
+
+**JSON Error Output:**
+```json
+{
+  "success": false,
+  "error": "DarkScan is disabled. Enable it in ~/.aftersec/config.yaml under daemon.darkscan.enabled"
+}
 ```
 
 ### 2. Enhanced Binary Analysis
