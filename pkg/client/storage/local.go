@@ -135,3 +135,23 @@ func (m *LocalManager) SaveConfig(cfg *core.Config) error {
 	}
 	return os.WriteFile(path, data, 0600)
 }
+
+func (m *LocalManager) LogTelemetryEvent(source, eventType, severity, details string) error {
+	return nil
+}
+
+func (m *LocalManager) QueryTelemetry(query string, args ...any) ([]map[string]any, error) {
+	return nil, fmt.Errorf("telemetry query not supported in local file manager")
+}
+
+func (m *LocalManager) PruneTelemetry(hours int) (int64, error) {
+	return 0, nil
+}
+
+func (m *LocalManager) GetUnsyncedTelemetry(limit int) ([]map[string]any, error) {
+	return nil, nil
+}
+
+func (m *LocalManager) MarkTelemetrySynced(ids []int) error {
+	return nil
+}

@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"aftersec/pkg/ai"
+	"aftersec/pkg/client/storage"
 	"aftersec/pkg/core"
 	"aftersec/pkg/forensics"
 	"aftersec/pkg/tuning"
@@ -42,7 +43,7 @@ func NumStarlarkRules() int {
 	return count
 }
 
-func ScanStarlark(addFinding func(core.Finding)) {
+func ScanStarlark(db storage.Manager, addFinding func(core.Finding)) {
 	if _, err := os.Stat(RulesDirectory); os.IsNotExist(err) {
 		return
 	}
@@ -111,6 +112,9 @@ func ScanStarlark(addFinding func(core.Finding)) {
 				return nil, err
 			}
 
+			if db != nil {
+				db.LogTelemetryEvent("starlark", "rule_finding", sev, desc)
+			}
 			addFinding(core.Finding{
 				Category:          category,
 				Name:              fmt.Sprintf("Custom Rule: %s", name),
@@ -147,7 +151,7 @@ func ScanStarlark(addFinding func(core.Finding)) {
 		})
 
 		scanProcesses := starlark.NewBuiltin("scan_processes", func(_ *starlark.Thread, _ *starlark.Builtin, _ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
-			procs, err := forensics.ScanRunningProcesses()
+			procs, err := forensics.ScanRunningProcesses(db)
 			if err != nil { return nil, err }
 			list := starlark.NewList(nil)
 			for _, p := range procs {

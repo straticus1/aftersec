@@ -17,6 +17,10 @@ import (
 var g *genkit.Genkit
 var activeModel string
 
+var swarmOpenAIModel string
+var swarmAnthropicModel string
+var swarmGeminiModel string
+
 // InitGenkit initializes the Genkit framework and registers the AI flows.
 func InitGenkit(ctx context.Context, cfg *client.ClientConfig) error {
 	var opts []genkit.GenkitOption
@@ -55,6 +59,20 @@ func InitGenkit(ctx context.Context, cfg *client.ClientConfig) error {
 	if prov == "" {
 		prov = "gemini"
 	}
+
+	swarmOpenAIModel = cfg.Daemon.AI.OpenAIModel
+	if swarmOpenAIModel == "" {
+		swarmOpenAIModel = "gpt-4o-mini"
+	}
+	swarmAnthropicModel = cfg.Daemon.AI.AnthropicModel
+	if swarmAnthropicModel == "" {
+		swarmAnthropicModel = "claude-3-5-sonnet-latest"
+	}
+	swarmGeminiModel = cfg.Daemon.AI.GeminiModel
+	if swarmGeminiModel == "" {
+		swarmGeminiModel = "gemini-2.5-flash"
+	}
+
 	log.Printf("[Success] Genkit AI Telemetry Analyst initialized (Provider: %s | Model: %s).", prov, activeModel)
 	return nil
 }
@@ -79,38 +97,193 @@ Telemetry:
 	return response.Text(), nil
 }
 
-// AnalyzeThreat executes the Genkit AI logic to analyze a threat finding.
+// AnalyzeThreat executes the Genkit AI logic to analyze a threat finding with budget tracking and circuit breaker
 func AnalyzeThreat(ctx context.Context, threatJSON string) (string, error) {
 	if g == nil {
 		return "", fmt.Errorf("Genkit flow not initialized")
 	}
-	return analyzeThreatInternal(ctx, threatJSON)
+
+	// Check budget before making API call
+	if budget := GetBudgetTracker(); budget != nil {
+		if err := budget.CheckBudget(ctx); err != nil {
+			return "", fmt.Errorf("budget limit exceeded: %w", err)
+		}
+	}
+
+	// Determine provider from active model
+	provider := getProviderFromModel(activeModel)
+	cb := GetCircuitBreaker(provider)
+
+	var result string
+	var llmErr error
+
+	// Execute with circuit breaker protection
+	err := cb.Call(ctx, func() error {
+		result, llmErr = analyzeThreatInternal(ctx, threatJSON)
+		return llmErr
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	// Record usage (estimate token count)
+	if budget := GetBudgetTracker(); budget != nil {
+		tokensIn := int64(len(threatJSON) / 4)   // Rough estimate: 4 chars per token
+		tokensOut := int64(len(result) / 4)
+		budget.RecordUsage(activeModel, tokensIn, tokensOut)
+	}
+
+	return result, nil
 }
 
-// AnalyzeThreatSwarm queries all available LLM models for independent triages and synthesizes a final Judge verdict.
+// getProviderFromModel determines the provider from a model name
+func getProviderFromModel(model string) string {
+	if containsSubstring(model, "gpt") || containsSubstring(model, "openai") {
+		return "openai"
+	}
+	if containsSubstring(model, "claude") || containsSubstring(model, "anthropic") {
+		return "anthropic"
+	}
+	if containsSubstring(model, "gemini") {
+		return "gemini"
+	}
+	return "unknown"
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// AnalyzeThreatSwarm queries all available LLM models for independent triages and synthesizes a final Judge verdict with budget tracking and circuit breakers
 func AnalyzeThreatSwarm(ctx context.Context, threatJSON string) (string, error) {
-	if g == nil { return "", fmt.Errorf("Genkit not initialized") }
+	if g == nil {
+		return "", fmt.Errorf("Genkit not initialized")
+	}
+
+	// Check budget before making API calls
+	if budget := GetBudgetTracker(); budget != nil {
+		if err := budget.CheckBudget(ctx); err != nil {
+			return "", fmt.Errorf("budget limit exceeded: %w", err)
+		}
+	}
+
 	opinions := ""
-	
+	analysisCount := 0
+
+	// OpenAI analysis with circuit breaker
 	if os.Getenv("OPENAI_API_KEY") != "" {
-		resp, _ := genkit.Generate(ctx, g, ai.WithModelName("gpt-4o-mini"), ai.WithPrompt(fmt.Sprintf("Analyze: %s", threatJSON)))
-		if resp != nil { opinions += "ChatGPT Analysis: " + resp.Text() + "\n\n" }
+		cb := GetCircuitBreaker("openai")
+		err := cb.Call(ctx, func() error {
+			resp, err := genkit.Generate(ctx, g, ai.WithModelName(swarmOpenAIModel), ai.WithPrompt(fmt.Sprintf("Analyze: %s", threatJSON)))
+			if err != nil {
+				return err
+			}
+			if resp != nil {
+				opinions += "ChatGPT Analysis: " + resp.Text() + "\n\n"
+				analysisCount++
+				// Record usage
+				if budget := GetBudgetTracker(); budget != nil {
+					tokensIn := int64(len(threatJSON) / 4)
+					tokensOut := int64(len(resp.Text()) / 4)
+					budget.RecordUsage(swarmOpenAIModel, tokensIn, tokensOut)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			log.Printf("[Warning] ChatGPT analysis failed: %v", err)
+		}
 	}
+
+	// Anthropic analysis with circuit breaker
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
-		resp, _ := genkit.Generate(ctx, g, ai.WithModelName("claude-3-5-sonnet-latest"), ai.WithPrompt(fmt.Sprintf("Analyze: %s", threatJSON)))
-		if resp != nil { opinions += "Claude Analysis: " + resp.Text() + "\n\n" }
+		cb := GetCircuitBreaker("anthropic")
+		err := cb.Call(ctx, func() error {
+			resp, err := genkit.Generate(ctx, g, ai.WithModelName(swarmAnthropicModel), ai.WithPrompt(fmt.Sprintf("Analyze: %s", threatJSON)))
+			if err != nil {
+				return err
+			}
+			if resp != nil {
+				opinions += "Claude Analysis: " + resp.Text() + "\n\n"
+				analysisCount++
+				// Record usage
+				if budget := GetBudgetTracker(); budget != nil {
+					tokensIn := int64(len(threatJSON) / 4)
+					tokensOut := int64(len(resp.Text()) / 4)
+					budget.RecordUsage(swarmAnthropicModel, tokensIn, tokensOut)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			log.Printf("[Warning] Claude analysis failed: %v", err)
+		}
 	}
+
+	// Gemini analysis with circuit breaker
 	if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_GENAI_API_KEY") != "" {
-		resp, _ := genkit.Generate(ctx, g, ai.WithModelName("gemini-2.5-flash"), ai.WithPrompt(fmt.Sprintf("Analyze: %s", threatJSON)))
-		if resp != nil { opinions += "Gemini Analysis: " + resp.Text() + "\n\n" }
+		cb := GetCircuitBreaker("gemini")
+		err := cb.Call(ctx, func() error {
+			resp, err := genkit.Generate(ctx, g, ai.WithModelName(swarmGeminiModel), ai.WithPrompt(fmt.Sprintf("Analyze: %s", threatJSON)))
+			if err != nil {
+				return err
+			}
+			if resp != nil {
+				opinions += "Gemini Analysis: " + resp.Text() + "\n\n"
+				analysisCount++
+				// Record usage
+				if budget := GetBudgetTracker(); budget != nil {
+					tokensIn := int64(len(threatJSON) / 4)
+					tokensOut := int64(len(resp.Text()) / 4)
+					budget.RecordUsage(swarmGeminiModel, tokensIn, tokensOut)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			log.Printf("[Warning] Gemini analysis failed: %v", err)
+		}
 	}
-	
+
+	if analysisCount == 0 {
+		return "", fmt.Errorf("all LLM models failed to provide analysis")
+	}
+
 	judgePrompt := fmt.Sprintf(`You are the Chief Security Officer. Review these independent LLM AI triage reports and synthesize a final, definitive threat judgment. End with a Bash Remediation sequence.
-Reports: 
+Reports:
 %s`, opinions)
-	finalResp, err := genkit.Generate(ctx, g, ai.WithModelName(activeModel), ai.WithPrompt(judgePrompt))
-	if err != nil { return "", err }
-	return finalResp.Text(), nil
+
+	// Judge synthesis with circuit breaker
+	provider := getProviderFromModel(activeModel)
+	cb := GetCircuitBreaker(provider)
+
+	var finalText string
+	err := cb.Call(ctx, func() error {
+		finalResp, err := genkit.Generate(ctx, g, ai.WithModelName(activeModel), ai.WithPrompt(judgePrompt))
+		if err != nil {
+			return fmt.Errorf("judge synthesis failed: %w", err)
+		}
+		finalText = finalResp.Text()
+		// Record judge usage
+		if budget := GetBudgetTracker(); budget != nil {
+			tokensIn := int64(len(judgePrompt) / 4)
+			tokensOut := int64(len(finalText) / 4)
+			budget.RecordUsage(activeModel, tokensIn, tokensOut)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	return finalText, nil
 }
 
 // AnalyzeBinarySemantics profiles a binary using NLP string extraction
@@ -184,24 +357,40 @@ DARK WEB INTEL: %s
 Provide threat assessment, confidence score, and attribution.`, threatJSON, darkWebContext)
 
 	opinions := ""
+	analysisCount := 0
 
 	if os.Getenv("OPENAI_API_KEY") != "" {
-		resp, _ := genkit.Generate(ctx, g, ai.WithModelName("gpt-4o-mini"), ai.WithPrompt(basePrompt))
-		if resp != nil {
+		resp, err := genkit.Generate(ctx, g, ai.WithModelName(swarmOpenAIModel), ai.WithPrompt(basePrompt))
+		if err != nil {
+			log.Printf("[Warning] ChatGPT analysis with intelligence failed: %v", err)
+		} else if resp != nil {
 			opinions += "ChatGPT Analysis: " + resp.Text() + "\n\n"
+			analysisCount++
 		}
 	}
+
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
-		resp, _ := genkit.Generate(ctx, g, ai.WithModelName("claude-3-5-sonnet-latest"), ai.WithPrompt(basePrompt))
-		if resp != nil {
+		resp, err := genkit.Generate(ctx, g, ai.WithModelName(swarmAnthropicModel), ai.WithPrompt(basePrompt))
+		if err != nil {
+			log.Printf("[Warning] Claude analysis with intelligence failed: %v", err)
+		} else if resp != nil {
 			opinions += "Claude Analysis: " + resp.Text() + "\n\n"
+			analysisCount++
 		}
 	}
+
 	if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_GENAI_API_KEY") != "" {
-		resp, _ := genkit.Generate(ctx, g, ai.WithModelName("gemini-2.5-flash"), ai.WithPrompt(basePrompt))
-		if resp != nil {
+		resp, err := genkit.Generate(ctx, g, ai.WithModelName(swarmGeminiModel), ai.WithPrompt(basePrompt))
+		if err != nil {
+			log.Printf("[Warning] Gemini analysis with intelligence failed: %v", err)
+		} else if resp != nil {
 			opinions += "Gemini Analysis: " + resp.Text() + "\n\n"
+			analysisCount++
 		}
+	}
+
+	if analysisCount == 0 {
+		return "", fmt.Errorf("all LLM models failed to provide analysis with dark web intelligence")
 	}
 
 	judgePrompt := fmt.Sprintf(`You are the Chief Security Officer. Review these independent LLM AI triage reports that incorporate dark web threat intelligence. Synthesize a final, definitive threat judgment with confidence score and attribution. End with Bash remediation sequence.
@@ -213,7 +402,8 @@ CRITICAL: The dark web intelligence provides IOCs (Indicators of Compromise) - i
 
 	finalResp, err := genkit.Generate(ctx, g, ai.WithModelName(activeModel), ai.WithPrompt(judgePrompt))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("judge synthesis with intelligence failed: %w", err)
 	}
+
 	return finalResp.Text(), nil
 }

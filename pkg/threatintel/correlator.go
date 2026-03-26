@@ -54,9 +54,9 @@ type cachedMention struct {
 }
 
 // NewThreatCorrelator creates a new threat correlation engine
-func NewThreatCorrelator(apiKey string) *ThreatCorrelator {
+func NewThreatCorrelator(client *DarkAPIClient) *ThreatCorrelator {
 	return &ThreatCorrelator{
-		darkAPI: NewDarkAPIClient(apiKey),
+		darkAPI: client,
 		cache: &threatCache{
 			iocs:     make(map[string]*cachedIOC),
 			breaches: make(map[string]*cachedBreach),
@@ -64,6 +64,31 @@ func NewThreatCorrelator(apiKey string) *ThreatCorrelator {
 			ttl:      15 * time.Minute,
 		},
 	}
+}
+
+// GetDarkAPIClient returns the underlying DarkAPI client for direct access
+func (tc *ThreatCorrelator) GetDarkAPIClient() *DarkAPIClient {
+	return tc.darkAPI
+}
+
+// CheckDomainBreaches checks if any accounts from a domain have been breached
+func (tc *ThreatCorrelator) CheckDomainBreaches(ctx context.Context, domain string) ([]BreachedAccount, error) {
+	return tc.darkAPI.CheckDomainBreaches(ctx, domain)
+}
+
+// CheckFileHash checks if a file hash is known malware
+func (tc *ThreatCorrelator) CheckFileHash(ctx context.Context, hash string) (*ThreatIOC, error) {
+	return tc.darkAPI.CheckFileHash(ctx, hash)
+}
+
+// CheckIPAddress checks if an IP is associated with malicious activity
+func (tc *ThreatCorrelator) CheckIPAddress(ctx context.Context, ip string) (*ThreatIOC, error) {
+	return tc.darkAPI.CheckIPAddress(ctx, ip)
+}
+
+// SearchDarkWeb searches dark web forums for keywords
+func (tc *ThreatCorrelator) SearchDarkWeb(ctx context.Context, keywords []string) ([]DarkWebMention, error) {
+	return tc.darkAPI.SearchDarkWeb(ctx, keywords)
 }
 
 // CorrelateProcessHash checks if a running process hash matches known malware

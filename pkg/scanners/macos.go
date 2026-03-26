@@ -1,6 +1,7 @@
 package scanners
 
 import (
+	"aftersec/pkg/client/storage"
 	"aftersec/pkg/core"
 	"aftersec/pkg/plugins"
 	"fmt"
@@ -9,10 +10,12 @@ import (
 	"time"
 )
 
-type MacOSScanner struct{}
+type MacOSScanner struct {
+	db storage.Manager
+}
 
-func NewMacOSScanner() *MacOSScanner {
-	return &MacOSScanner{}
+func NewMacOSScanner(db storage.Manager) *MacOSScanner {
+	return &MacOSScanner{db: db}
 }
 
 func (s *MacOSScanner) Scan(progress func(percent float64, message string)) (*core.SecurityState, error) {
@@ -442,7 +445,7 @@ func (s *MacOSScanner) Scan(progress func(percent float64, message string)) (*co
 	// 24. Delegate to Deep Scanning Modules
 	ScanSecrets(addFinding)
 	ScanVulnerabilities(addFinding)
-	plugins.ScanStarlark(addFinding)
+	plugins.ScanStarlark(s.db, addFinding)
 
 	return state, nil
 }

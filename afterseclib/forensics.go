@@ -6,7 +6,7 @@ import (
 
 // ScanProcesses runs a dynamic behavioral memory scan extracting indicators and evaluating ThreatScores.
 func ScanProcesses() ([]forensics.ProcessFinding, error) {
-	return forensics.ScanRunningProcesses()
+	return forensics.ScanRunningProcesses(nil)
 }
 
 // ScanPersistenceMechanisms deeply evaluates the Plists in standard AutoStart directories.

@@ -2,7 +2,7 @@
 
 **Next-Generation macOS Endpoint Detection & Response (EDR) with Multi-LLM AI Threat Analysis**
 
-[![License](https://img.shields.io/badge/license-Proprietary-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Elastic%202.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/go-1.22+-00ADD8.svg)](https://golang.org)
 [![macOS](https://img.shields.io/badge/macOS-10.15+-000000.svg?logo=apple)](https://www.apple.com/macos)
 
@@ -602,9 +602,9 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## 📝 License
 
-Copyright © 2026 AfterSec by After Dark Systems, LLC
+This project is licensed under the **Elastic License 2.0 (ELv2)**. 
 
-This is proprietary software. See [LICENSE](LICENSE) for details.
+You are free to use, modify, distribute, and embed this code in your own infrastructure. However, you may not provide the software to third parties as a hosted or managed service that competes with AfterSec. See the [LICENSE](LICENSE) file for the full legal text.
 
 For commercial licensing inquiries: licensing@aftersec.io
 

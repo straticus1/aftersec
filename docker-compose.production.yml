@@ -1,0 +1,370 @@
+version: '3.8'
+
+# Production Docker Compose configuration for AfterSec on OCI
+# Optimized for self-hosted deployment with Cloudflare Tunnels
+# Cost: ~$2,340/month for 10K endpoints
+
+services:
+  # PostgreSQL Primary (Self-hosted)
+  postgres-primary:
+    image: postgres:16-alpine
+    container_name: aftersec-postgres-primary
+    environment:
+      POSTGRES_DB: aftersec
+      POSTGRES_USER: aftersec
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=en_US.UTF-8"
+      # Performance tuning for OCI VM.Standard.E4.Flex (4 vCPU, 64GB RAM)
+      POSTGRES_SHARED_BUFFERS: 16GB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 48GB
+      POSTGRES_MAX_CONNECTIONS: 300
+      POSTGRES_WORK_MEM: 128MB
+      POSTGRES_MAINTENANCE_WORK_MEM: 2GB
+      POSTGRES_CHECKPOINT_COMPLETION_TARGET: 0.9
+      POSTGRES_WAL_BUFFERS: 16MB
+      POSTGRES_DEFAULT_STATISTICS_TARGET: 100
+      POSTGRES_RANDOM_PAGE_COST: 1.1
+      POSTGRES_EFFECTIVE_IO_CONCURRENCY: 200
+      POSTGRES_MIN_WAL_SIZE: 2GB
+      POSTGRES_MAX_WAL_SIZE: 8GB
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aftersec -d aftersec"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aftersec-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 32G
+        reservations:
+          cpus: '2'
+          memory: 16G
+    restart: unless-stopped
+
+  # PostgreSQL Replica (Read-only)
+  postgres-replica:
+    image: postgres:16-alpine
+    container_name: aftersec-postgres-replica
+    environment:
+      POSTGRES_DB: aftersec
+      POSTGRES_USER: aftersec
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PRIMARY_HOST: postgres-primary
+      POSTGRES_PRIMARY_PORT: 5432
+    volumes:
+      - postgres-replica-data:/var/lib/postgresql/data
+      - ./scripts/postgres-replica-init.sh:/docker-entrypoint-initdb.d/replica-init.sh:ro
+    ports:
+      - "5433:5432"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aftersec -d aftersec"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aftersec-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 16G
+        reservations:
+          cpus: '1'
+          memory: 8G
+    restart: unless-stopped
+
+  # PgBouncer (Connection Pooler)
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: aftersec-pgbouncer
+    environment:
+      DATABASE_URL: postgres://aftersec:${POSTGRES_PASSWORD}@postgres-primary:5432/aftersec
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: 100
+      RESERVE_POOL_SIZE: 20
+      SERVER_IDLE_TIMEOUT: 600
+      STATS_USERS: aftersec
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aftersec-network
+    restart: unless-stopped
+
+  # Redis Cluster (Distributed caching and rate limiting)
+  redis:
+    image: redis:7-alpine
+    container_name: aftersec-redis
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 8gb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aftersec-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 10G
+        reservations:
+          cpus: '1'
+          memory: 8G
+    restart: unless-stopped
+
+  # AfterSec API Server (Auto-scaling with 3 replicas)
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: aftersec-api:latest
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    environment:
+      # Database
+      DATABASE_URL: postgres://aftersec:${POSTGRES_PASSWORD}@pgbouncer:5432/aftersec
+      DATABASE_MAX_CONNECTIONS: 100
+      DATABASE_MAX_IDLE_CONNS: 10
+      DATABASE_CONN_MAX_LIFETIME: 3600
+
+      # Redis
+      REDIS_URL: redis://redis:6379
+      REDIS_RATE_LIMIT_ENABLED: "true"
+
+      # JWT Authentication
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRY: 24h
+
+      # LLM APIs
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+
+      # LLM Budget Limits
+      LLM_DAILY_BUDGET: 100.00
+      LLM_MONTHLY_BUDGET: 2000.00
+
+      # Dark Web Intelligence
+      DARKAPI_API_KEY: ${DARKAPI_API_KEY}
+      THREAT_INTEL_ENABLED: "true"
+
+      # Server Config
+      PORT: 8080
+      GRPC_PORT: 9090
+      TLS_CERT: /certs/server.crt
+      TLS_KEY: /certs/server.key
+      TLS_CA: /certs/ca.crt
+
+      # Observability
+      PROMETHEUS_METRICS_ENABLED: "true"
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+    volumes:
+      - ./certs:/certs:ro
+      - api-logs:/var/log/aftersec
+    ports:
+      - "8080-8082:8080"  # REST API (3 replicas)
+      - "9090-9092:9090"  # gRPC (3 replicas)
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - aftersec-network
+    restart: unless-stopped
+
+  # Prometheus (Metrics Collection)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aftersec-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - aftersec-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    restart: unless-stopped
+
+  # Grafana (Visualization)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aftersec-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_SERVER_ROOT_URL: https://grafana.${DOMAIN}
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana-dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - aftersec-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    restart: unless-stopped
+
+  # Loki (Log Aggregation)
+  loki:
+    image: grafana/loki:latest
+    container_name: aftersec-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    networks:
+      - aftersec-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    restart: unless-stopped
+
+  # Promtail (Log Shipper)
+  promtail:
+    image: grafana/promtail:latest
+    container_name: aftersec-promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - api-logs:/var/log/aftersec:ro
+    depends_on:
+      - loki
+    networks:
+      - aftersec-network
+    restart: unless-stopped
+
+  # Backup Service (OCI Object Storage)
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    image: aftersec-backup:latest
+    container_name: aftersec-backup
+    environment:
+      OCI_NAMESPACE: ${OCI_NAMESPACE}
+      OCI_BUCKET: ${OCI_BACKUP_BUCKET}
+      OCI_REGION: ${OCI_REGION}
+      POSTGRES_HOST: postgres-primary
+      POSTGRES_DB: aftersec
+      POSTGRES_USER: aftersec
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_SCHEDULE: "0 2 * * *"  # Daily at 2 AM
+      BACKUP_RETENTION_DAYS: 30
+    volumes:
+      - postgres-data:/postgres-data:ro
+      - ./backups:/backups
+      - ./oci-config:/root/.oci:ro
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    networks:
+      - aftersec-network
+    restart: unless-stopped
+
+networks:
+  aftersec-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  postgres-data:
+    driver: local
+  postgres-replica-data:
+    driver: local
+  redis-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  loki-data:
+    driver: local
+  api-logs:
+    driver: local

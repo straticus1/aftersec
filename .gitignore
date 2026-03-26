@@ -39,3 +39,12 @@ go.work.sum
 .env
 .env.local
 secrets/
+
+# Build artifacts
+cmd/aftersec-server/aftersec-server
+test_analytics
+bin/
+*.so
+*.dylib
+*.a
+aftersec-macos-release.tar.gz

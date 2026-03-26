@@ -12,7 +12,10 @@ import {
   ChevronDown,
   CodeXml,
   Sparkles,
-  Search
+  Search,
+  ShieldCheck,
+  BrainCircuit,
+  Bot
 } from 'lucide-react';
 import { useTenant } from '@/lib/contexts/TenantContext';
 import { useAuthContext } from '@/lib/contexts/AuthContext';
@@ -26,6 +29,9 @@ const navigation = [
   { name: 'Process X-Ray', href: '/xray', icon: Activity, shortcut: ['⌘', 'X'] },
   { name: 'Detection Rules', href: '/rules', icon: CodeXml, shortcut: ['⌘', 'R'] },
   { name: 'AI Triage', href: '/triage', icon: Sparkles, shortcut: ['⌘', 'T'] },
+  { name: 'Endpoint AI', href: '/endpoint-ai', icon: BrainCircuit, shortcut: ['⌘', 'L'] },
+  { name: 'Bandit AI', href: '/bandit', icon: Bot, shortcut: ['⌘', 'B'] },
+  { name: 'Signatures', href: '/signatures', icon: ShieldCheck, shortcut: ['⌘', 'S'] },
   { name: 'Compliance', href: '/compliance', icon: FileCheck, shortcut: ['⌘', 'C'] },
 ];
 

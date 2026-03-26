@@ -24,7 +24,7 @@ func main() {}
 
 //export RunSecurityScan
 func RunSecurityScan() *C.char {
-	scanner := scanners.NewMacOSScanner()
+	scanner := scanners.NewMacOSScanner(nil)
 	state, err := scanner.Scan(nil)
 	if err != nil {
 		return C.CString(`{"error": "` + err.Error() + `"}`)

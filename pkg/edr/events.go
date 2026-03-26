@@ -9,6 +9,7 @@ const (
 	EventNotifyExec   EventType = "notify_exec"
 	EventNotifyCreate EventType = "notify_create"
 	EventNotifyExit   EventType = "notify_exit"
+	EventNotifyMount  EventType = "notify_mount"
 )
 
 // ProcessEvent holds normalized telemetry for a process/filesystem event
@@ -18,6 +19,7 @@ type ProcessEvent struct {
 	PID       int
 	PPID      int
 	ExecPath  string
+	MountPath string
 	Args      []string
 	UID       uint32
 }

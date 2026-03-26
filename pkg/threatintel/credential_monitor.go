@@ -21,9 +21,9 @@ type CredentialMonitor struct {
 }
 
 // NewCredentialMonitor creates a new credential monitoring service
-func NewCredentialMonitor(apiKey string, orgDomain string, checkInterval time.Duration, callback func(*CorrelatedThreat)) *CredentialMonitor {
+func NewCredentialMonitor(client *DarkAPIClient, orgDomain string, checkInterval time.Duration, callback func(*CorrelatedThreat)) *CredentialMonitor {
 	return &CredentialMonitor{
-		correlator:    NewThreatCorrelator(apiKey),
+		correlator:    NewThreatCorrelator(client),
 		checkInterval: checkInterval,
 		orgDomain:     orgDomain,
 		alertCallback: callback,
@@ -142,7 +142,7 @@ func (cm *CredentialMonitor) CheckDomainBreaches(ctx context.Context) ([]Breache
 	}
 
 	log.Printf("[ThreatIntel] Checking all breaches for domain: %s", cm.orgDomain)
-	breaches, err := cm.correlator.darkAPI.CheckDomainBreaches(ctx, cm.orgDomain)
+	breaches, err := cm.correlator.CheckDomainBreaches(ctx, cm.orgDomain)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check domain breaches: %w", err)
 	}

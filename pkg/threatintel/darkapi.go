@@ -5,29 +5,157 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"aftersec/pkg/ratelimit"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
-	DarkAPIBaseURL = "https://api.darkapi.io/v1"
+	DarkAPIBaseURL     = "https://api.darkapi.io/v1"
+	maxRetries         = 3
+	initialBackoff     = 1 * time.Second
+	maxBackoff         = 30 * time.Second
+	rateLimitPerMinute = 60 // API calls per minute
 )
+
+// RateLimiter interface for both local and distributed rate limiting
+type RateLimiter interface {
+	Wait(ctx context.Context, identifier string) error
+}
 
 // DarkAPIClient handles interactions with DarkAPI.io threat intelligence
 type DarkAPIClient struct {
-	apiKey     string
-	httpClient *http.Client
+	apiKey            string
+	httpClient        *http.Client
+	localRateLimiter  *localRateLimiter
+	redisRateLimiter  *ratelimit.RedisRateLimiter
+	useRedis          bool
+	rateLimitIdentity string // Identifier for distributed rate limiting (e.g., "global" or tenant ID)
 }
 
-// NewDarkAPIClient creates a new DarkAPI.io client
-func NewDarkAPIClient(apiKey string) *DarkAPIClient {
-	return &DarkAPIClient{
+// localRateLimiter implements in-memory token bucket rate limiting
+// This is suitable for single-server deployments
+type localRateLimiter struct {
+	tokens    int
+	maxTokens int
+	mu        sync.Mutex
+	ticker    *time.Ticker
+	done      chan bool
+}
+
+// newLocalRateLimiter creates a local rate limiter with specified requests per minute
+func newLocalRateLimiter(requestsPerMinute int) *localRateLimiter {
+	rl := &localRateLimiter{
+		tokens:    requestsPerMinute,
+		maxTokens: requestsPerMinute,
+		ticker:    time.NewTicker(time.Minute / time.Duration(requestsPerMinute)),
+		done:      make(chan bool),
+	}
+
+	go func() {
+		for {
+			select {
+			case <-rl.ticker.C:
+				rl.mu.Lock()
+				if rl.tokens < rl.maxTokens {
+					rl.tokens++
+				}
+				rl.mu.Unlock()
+			case <-rl.done:
+				return
+			}
+		}
+	}()
+
+	return rl
+}
+
+// Wait blocks until a token is available (implements RateLimiter interface)
+func (rl *localRateLimiter) Wait(ctx context.Context, identifier string) error {
+	for {
+		rl.mu.Lock()
+		if rl.tokens > 0 {
+			rl.tokens--
+			rl.mu.Unlock()
+			return nil
+		}
+		rl.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+			// Continue loop
+		}
+	}
+}
+
+// stop stops the rate limiter
+func (rl *localRateLimiter) stop() {
+	rl.ticker.Stop()
+	close(rl.done)
+}
+
+// ClientOption is a functional option for configuring DarkAPIClient
+type ClientOption func(*DarkAPIClient) error
+
+// WithRedisRateLimiter configures the client to use Redis-based distributed rate limiting
+// This is required for production multi-server deployments
+func WithRedisRateLimiter(redisClient *redis.Client, identifier string) ClientOption {
+	return func(c *DarkAPIClient) error {
+		if redisClient == nil {
+			return fmt.Errorf("redis client cannot be nil")
+		}
+		c.redisRateLimiter = ratelimit.NewRedisRateLimiter(
+			redisClient,
+			"darkapi:ratelimit",
+			rateLimitPerMinute,
+			time.Minute/time.Duration(rateLimitPerMinute),
+		)
+		c.useRedis = true
+		c.rateLimitIdentity = identifier
+		return nil
+	}
+}
+
+// NewDarkAPIClient creates a new DarkAPI.io client with retry logic and rate limiting
+// By default, uses local in-memory rate limiting (suitable for single-server deployments)
+// For production multi-server deployments, use WithRedisRateLimiter option
+func NewDarkAPIClient(apiKey string, opts ...ClientOption) (*DarkAPIClient, error) {
+	client := &DarkAPIClient{
 		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		localRateLimiter:  newLocalRateLimiter(rateLimitPerMinute),
+		useRedis:          false,
+		rateLimitIdentity: "global",
 	}
+
+	// Apply options
+	for _, opt := range opts {
+		if err := opt(client); err != nil {
+			return nil, fmt.Errorf("failed to apply client option: %w", err)
+		}
+	}
+
+	return client, nil
+}
+
+// Close stops the rate limiter and closes connections
+func (c *DarkAPIClient) Close() error {
+	if c.localRateLimiter != nil {
+		c.localRateLimiter.stop()
+	}
+	if c.redisRateLimiter != nil {
+		return c.redisRateLimiter.Close()
+	}
+	return nil
 }
 
 // BreachedAccount represents a compromised credential
@@ -66,6 +194,53 @@ type DarkWebMention struct {
 	Keywords    []string  `json:"keywords"`
 }
 
+// doRequestWithRetry executes an HTTP request with exponential backoff retry logic
+func (c *DarkAPIClient) doRequestWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
+	// Apply rate limiting (local or distributed)
+	if c.useRedis && c.redisRateLimiter != nil {
+		if err := c.redisRateLimiter.Wait(ctx, c.rateLimitIdentity); err != nil {
+			return nil, fmt.Errorf("distributed rate limit wait failed: %w", err)
+		}
+	} else if c.localRateLimiter != nil {
+		if err := c.localRateLimiter.Wait(ctx, ""); err != nil {
+			return nil, fmt.Errorf("local rate limit wait failed: %w", err)
+		}
+	}
+
+	var lastErr error
+	backoff := initialBackoff
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Wait with exponential backoff
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Success or non-retryable error
+		if resp.StatusCode < 500 {
+			return resp, nil
+		}
+
+		// Server error - retry
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		lastErr = fmt.Errorf("server error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil, fmt.Errorf("request failed after %d retries: %w", maxRetries, lastErr)
+}
+
 // CheckBreachedEmail checks if an email has been compromised
 func (c *DarkAPIClient) CheckBreachedEmail(ctx context.Context, email string) ([]BreachedAccount, error) {
 	endpoint := fmt.Sprintf("%s/breaches/email/%s", DarkAPIBaseURL, email)
@@ -78,14 +253,13 @@ func (c *DarkAPIClient) CheckBreachedEmail(ctx context.Context, email string) ([
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doRequestWithRetry(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 404 {
-		// No breaches found
 		return []BreachedAccount{}, nil
 	}
 
@@ -114,7 +288,7 @@ func (c *DarkAPIClient) CheckDomainBreaches(ctx context.Context, domain string) 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doRequestWithRetry(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -149,14 +323,13 @@ func (c *DarkAPIClient) CheckIOC(ctx context.Context, iocType, value string) (*T
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doRequestWithRetry(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 404 {
-		// IOC not found in threat database
 		return nil, nil
 	}
 
@@ -180,7 +353,7 @@ func (c *DarkAPIClient) SearchDarkWeb(ctx context.Context, keywords []string) ([
 	payload := map[string]interface{}{
 		"keywords": keywords,
 		"sources":  []string{"forum", "marketplace", "paste", "telegram"},
-		"days":     30, // Last 30 days
+		"days":     30,
 	}
 
 	body, err := json.Marshal(payload)
@@ -196,7 +369,7 @@ func (c *DarkAPIClient) SearchDarkWeb(ctx context.Context, keywords []string) ([
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doRequestWithRetry(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}

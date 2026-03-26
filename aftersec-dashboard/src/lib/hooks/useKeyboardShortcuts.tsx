@@ -112,6 +112,12 @@ export function useGlobalShortcuts() {
       handler: () => router.push('/triage'),
     },
     {
+      key: 's',
+      metaKey: true,
+      description: 'Go to Signatures',
+      handler: () => router.push('/signatures'),
+    },
+    {
       key: 'c',
       metaKey: true,
       description: 'Go to Compliance',
@@ -146,7 +152,9 @@ export function useGlobalShortcuts() {
 }
 
 // Shortcut hint component
-export function ShortcutHint({ keys }: { keys: string[] }) {
+export function ShortcutHint({ keys }: { keys?: string[] }) {
+  if (!keys || !Array.isArray(keys)) return null;
+  
   return (
     <span className="ml-auto flex gap-1 text-xs text-gray-500 font-mono">
       {keys.map((key, i) => (

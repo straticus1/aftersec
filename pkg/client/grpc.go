@@ -93,3 +93,40 @@ func (c *EnterpriseClient) StreamEvents(ctx context.Context) (grpcapi.Enterprise
 func (c *EnterpriseClient) ConnectCommandStream(ctx context.Context) (grpcapi.EnterpriseService_ConnectCommandStreamClient, error) {
 	return c.grpcClient.ConnectCommandStream(ctx)
 }
+
+// StreamTelemetryBatch takes local SQLite events and streams them over gRPC, returning the processed count
+func (c *EnterpriseClient) StreamTelemetryBatch(ctx context.Context, tenantID, hwID string, events []map[string]any) (int32, error) {
+	stream, err := c.grpcClient.StreamEvents(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	for _, ev := range events {
+		var unixTime int64
+		// Dynamic typing helper to handle SQL timestamp parsing
+		if ts, ok := ev["timestamp"].(time.Time); ok {
+			unixTime = ts.Unix()
+		}
+
+		eventType, _ := ev["event_type"].(string)
+		detailsRaw, _ := ev["details"].(string)
+
+		clientEv := &grpcapi.ClientEvent{
+			TenantId:   tenantID,
+			HardwareId: hwID,
+			Timestamp:  unixTime,
+			EventType:  eventType,
+			Payload:    detailsRaw,
+		}
+		
+		if err := stream.Send(clientEv); err != nil {
+			return 0, err
+		}
+	}
+
+	ack, err := stream.CloseAndRecv()
+	if err != nil {
+		return 0, err
+	}
+	return ack.EventsProcessed, nil
+}

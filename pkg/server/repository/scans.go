@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -81,13 +82,13 @@ func (r *ScanRepository) List(ctx context.Context, endpointID, orgID string, lim
 	argIdx := 1
 
 	if orgID != "" {
-		query += " AND organization_id = $" + string(rune(argIdx+'0'))
+		query += fmt.Sprintf(" AND organization_id = $%d", argIdx)
 		args = append(args, orgID)
 		argIdx++
 	}
 
 	if endpointID != "" {
-		query += " AND endpoint_id = $" + string(rune(argIdx+'0'))
+		query += fmt.Sprintf(" AND endpoint_id = $%d", argIdx)
 		args = append(args, endpointID)
 		argIdx++
 	}
@@ -95,7 +96,7 @@ func (r *ScanRepository) List(ctx context.Context, endpointID, orgID string, lim
 	query += " ORDER BY started_at DESC"
 
 	if limit > 0 {
-		query += " LIMIT $" + string(rune(argIdx+'0'))
+		query += fmt.Sprintf(" LIMIT $%d", argIdx)
 		args = append(args, limit)
 	}
 

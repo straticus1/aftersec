@@ -2,7 +2,7 @@ package edr
 
 /*
 #cgo CFLAGS: -mmacosx-version-min=10.15
-#cgo LDFLAGS: -mmacosx-version-min=10.15 -framework Foundation -lEndpointSecurity
+#cgo LDFLAGS: -mmacosx-version-min=10.15 -framework Foundation -lEndpointSecurity -lbsm
 #include "es_wrapper.h"
 #include <stdlib.h>
 */
@@ -37,12 +37,38 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 		eventType = EventNotifyExec
 	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_EXIT {
 		eventType = EventNotifyExit
+	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_MOUNT { // NEW: DMG/ISO Interception
+		eventType = EventNotifyMount
+	}
+
+	var execPath string
+	var mountPath string
+
+	pid := int(C.get_pid(msg))
+	ppid := int(C.get_ppid(msg))
+	uid := uint32(C.get_uid(msg))
+	
+	var length C.int
+	cPath := C.get_executable_path(msg, &length)
+	if length > 0 {
+		execPath = C.GoStringN(cPath, length)
+	}
+
+	// Mount path extraction (only populated if struct contains statfs struct pointer)
+	var mLen C.int
+	mPath := C.get_mount_path(msg, &mLen)
+	if mLen > 0 {
+		mountPath = C.GoStringN(mPath, mLen)
 	}
 
 	globalConsumer.events <- ProcessEvent{
 		Type:      eventType,
 		Timestamp: time.Now(),
-		// We can parse the exact fields from msg->process using C struct accessors
+		PID:       pid,
+		PPID:      ppid,
+		ExecPath:  execPath,
+		MountPath: mountPath,
+		UID:       uid,
 	}
 }
 

@@ -38,6 +38,24 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories) *Rou
 	mux.HandleFunc("/api/v1/scans", jwtManager.HTTPMiddleware(router.handleScans))
 	mux.HandleFunc("/api/v1/scans/", jwtManager.HTTPMiddleware(router.handleScan))
 
+	// Bandit AI API (requires Professional tier)
+	mux.HandleFunc("/api/v1/bandit/query", jwtManager.HTTPMiddleware(
+		router.RequireTier(TierProfessional)(HandleBanditQuery)))
+
+	// Dark Web Intelligence API (requires Professional tier)
+	mux.HandleFunc("/api/v1/darkweb/alerts", jwtManager.HTTPMiddleware(
+		router.RequireTier(TierProfessional)(HandleDarkWebAlerts)))
+	mux.HandleFunc("/api/v1/darkweb/config", jwtManager.HTTPMiddleware(
+		router.RequireTier(TierProfessional)(HandleDarkWebConfig)))
+
+	// AI Budget and Usage API (all tiers)
+	mux.HandleFunc("/api/v1/ai/budget", jwtManager.HTTPMiddleware(router.handleAIBudget))
+	mux.HandleFunc("/api/v1/ai/usage", jwtManager.HTTPMiddleware(router.handleAIUsage))
+
+	// Tier Management API
+	mux.HandleFunc("/api/v1/organizations/tier", jwtManager.HTTPMiddleware(router.handleGetTierInfo))
+	mux.HandleFunc("/api/v1/organizations/upgrade", jwtManager.HTTPMiddleware(router.handleUpgradeTier))
+
 	// MDM Remote Action Webhook (Lost Device, Quarantine)
 	mux.HandleFunc("/api/v1/endpoints/action", jwtManager.HTTPMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

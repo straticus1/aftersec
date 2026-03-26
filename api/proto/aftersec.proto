@@ -35,17 +35,20 @@ message HeartbeatRequest {
 message HeartbeatResponse {
   bool policy_updated = 1;
   string new_policy_hash = 2;
-  string action = 3; // "NONE", "RESTART", "UPDATE", "QUARANTINE", "LOCK_SCREEN", "WIPE_DATA"
+  string action = 3; // "NONE", "RESTART", "UPDATE", "QUARANTINE", "LOCK_SCREEN", "WIPE_DATA", "ISOLATE_NETWORK", "FREEZE_PROCESS"
 }
 
 message ClientEvent {
   string tenant_id = 1;
   string hardware_id = 2;
   int64 timestamp = 3;
-  string event_type = 4; // "SYSCALL", "FILE_MOD", "NETWORK_CONN", "PROCESS_EXEC", "PROCESS_EXIT"
+  string event_type = 4; // "SYSCALL", "FILE_MOD", "NETWORK_CONN", "PROCESS_EXEC", "PROCESS_EXIT", "INTENT_GRAPH_BLOCK", "AI_TRIAGE"
   string process_name = 5;
   int32 process_id = 6;
   string payload = 7; // JSON encoded details
+  int32 parent_process_id = 8;
+  int32 threat_score = 9;
+  string ai_verdict = 10;
 }
 
 message StreamAck {
@@ -63,6 +66,6 @@ message CommandResult {
 
 message ServerCommand {
   string command_id = 1;
-  string action = 2; // "EXEC", "REMEDIATE", "LOCK_SCREEN", "WIPE_DATA", "QUARANTINE"
+  string action = 2; // "EXEC", "REMEDIATE", "LOCK_SCREEN", "WIPE_DATA", "QUARANTINE", "ISOLATE_NETWORK", "FREEZE_PROCESS", "CREATE_SNAPSHOT"
   string payload = 3;
 }

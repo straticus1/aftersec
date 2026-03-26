@@ -61,8 +61,11 @@ type RemediationConfig struct {
 }
 
 type AIConfig struct {
-	Provider string `yaml:"provider"`
-	Model    string `yaml:"model"`
+	Provider       string `yaml:"provider"`
+	Model          string `yaml:"model"`
+	OpenAIModel    string `yaml:"openai_model"`
+	AnthropicModel string `yaml:"anthropic_model"`
+	GeminiModel    string `yaml:"gemini_model"`
 }
 
 type ThreatIntelConfig struct {
@@ -77,12 +80,30 @@ type ThreatIntelConfig struct {
 	CredentialCheckFreq string   `yaml:"credential_check_freq"` // daily, weekly, monthly
 }
 
+type EndpointAIMode string
+
+const (
+	ModeObserving  EndpointAIMode = "observing"
+	ModeTraining   EndpointAIMode = "training"
+	ModeEnforcing  EndpointAIMode = "enforcing"
+	ModeDisabled   EndpointAIMode = "disabled"
+)
+
+type EndpointAIConfig struct {
+	Enabled          bool           `yaml:"enabled"`
+	Mode             EndpointAIMode `yaml:"mode"`
+	TrainingInterval string         `yaml:"training_interval"` // e.g., "ebd" or "24h"
+	MaxEpochs        int            `yaml:"max_epochs"`
+	LocalModelPath   string         `yaml:"local_model_path"`
+}
+
 type DaemonConfig struct {
 	Scheduling   SchedulingConfig  `yaml:"scheduling"`
 	Resources    ResourceConfig    `yaml:"resources"`
 	Alerts       AlertConfig       `yaml:"alerts"`
 	Remediation  RemediationConfig `yaml:"remediation"`
 	AI           AIConfig          `yaml:"ai"`
+	EndpointAI   EndpointAIConfig  `yaml:"endpoint_ai"`
 	ThreatIntel  ThreatIntelConfig `yaml:"threat_intel"`
 }
 
@@ -129,8 +150,18 @@ func DefaultClientConfig() *ClientConfig {
 				AutoRemediate: false,
 			},
 			AI: AIConfig{
-				Provider: "gemini",
-				Model:    "gemini-2.5-flash",
+				Provider:       "gemini",
+				Model:          "gemini-2.5-flash",
+				OpenAIModel:    "gpt-4o-mini",
+				AnthropicModel: "claude-3-5-sonnet-latest",
+				GeminiModel:    "gemini-2.5-flash",
+			},
+			EndpointAI: EndpointAIConfig{
+				Enabled:          true,
+				Mode:             ModeObserving,
+				TrainingInterval: "24h",
+				MaxEpochs:        100,
+				LocalModelPath:   filepath.Join(home, ".aftersec", "models", "baseline.lora"),
 			},
 			ThreatIntel: ThreatIntelConfig{
 				Enabled:             false, // Disabled by default, requires API key

@@ -175,6 +175,79 @@ export default function SettingsPage() {
             </div>
           </section>
 
+          {/* macOS Kernel Parameters (sysctl) */}
+          <section className="bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-xl lg:col-span-2 relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
+              <svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            </div>
+            <h2 className="text-lg font-semibold text-white mb-6 border-b border-gray-800 pb-3">macOS Kernel Parameters (sysctl)</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 relative z-10">
+              
+              <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700/50 flex flex-col justify-between">
+                <div>
+                  <div className="flex justify-between items-start mb-2">
+                    <p className="text-sm font-bold text-gray-200 font-mono">net.inet.tcp.blackhole</p>
+                    <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded text-xs font-semibold">Network</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-3">Drops TCP segments to closed ports without returning a RST, preventing port scanning reconnaissance.</p>
+                </div>
+                <select className="bg-gray-950 text-indigo-400 border border-gray-700 rounded-md py-1.5 px-3 text-sm focus:ring-0 w-full font-mono">
+                  <option value="2">2 (Drop all)</option>
+                  <option value="1">1 (Drop SYN only)</option>
+                  <option value="0">0 (Disabled)</option>
+                </select>
+              </div>
+
+              <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700/50 flex flex-col justify-between">
+                <div>
+                  <div className="flex justify-between items-start mb-2">
+                    <p className="text-sm font-bold text-gray-200 font-mono">net.inet.udp.blackhole</p>
+                    <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded text-xs font-semibold">Network</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-3">Drops UDP datagrams to closed ports silently without returning an ICMP Port Unreachable packet.</p>
+                </div>
+                <div className="flex items-center justify-between bg-gray-950 px-3 py-1.5 rounded-md border border-gray-700 text-sm">
+                  <span className="text-gray-400">Enabled</span>
+                  <div className="relative inline-flex h-5 w-9 items-center rounded-full bg-indigo-500">
+                    <span className="inline-block h-3 w-3 transform rounded-full bg-white translate-x-5" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700/50 flex flex-col justify-between">
+                <div>
+                  <div className="flex justify-between items-start mb-2">
+                    <p className="text-sm font-bold text-gray-200 font-mono">kern.securelevel</p>
+                    <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded text-xs font-semibold">System</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-3">System immutability level. Level 1 prevents altering immutable flags and denies raw disk writing.</p>
+                </div>
+                <select className="bg-gray-950 text-amber-400 border border-gray-700 rounded-md py-1.5 px-3 text-sm focus:ring-0 w-full font-mono">
+                  <option value="1">1 (Highly Secure)</option>
+                  <option value="0">0 (Default)</option>
+                  <option value="-1">-1 (Permanently Insecure)</option>
+                </select>
+              </div>
+
+              <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700/50 flex flex-col justify-between">
+                <div>
+                  <div className="flex justify-between items-start mb-2">
+                    <p className="text-sm font-bold text-gray-200 font-mono">security.mac.vnode_enforce</p>
+                    <span className="px-2 py-0.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded text-xs font-semibold">Mandatory Access</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-3">Enforces Mandatory Access Control (MAC) policies on file system vnodes.</p>
+                </div>
+                <div className="flex items-center justify-between bg-gray-950 px-3 py-1.5 rounded-md border border-gray-700 text-sm">
+                  <span className="text-gray-400">Enabled</span>
+                  <div className="relative inline-flex h-5 w-9 items-center rounded-full bg-indigo-500">
+                    <span className="inline-block h-3 w-3 transform rounded-full bg-white translate-x-5" />
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </section>
+
           {/* Scheduled Reports */}
           <section className="bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-xl lg:col-span-2">
             <h2 className="text-lg font-semibold text-white mb-6 border-b border-gray-800 pb-3 flex items-center gap-2">
@@ -196,6 +269,16 @@ export default function SettingsPage() {
           </section>
         </div>
       </RoleGuard>
+
+      {/* Global Save Action Bar */}
+      <div className="fixed bottom-0 left-0 right-0 bg-gray-900/95 backdrop-blur-sm border-t border-gray-800 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.5)] z-50 transform transition-transform ml-64 flex justify-end gap-4">
+        <button 
+          onClick={() => alert("Settings configuration saved and propagated to endpoints.")} 
+          className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-2.5 rounded-lg font-bold shadow-lg shadow-indigo-500/20 transition-all"
+        >
+          Save Configuration
+        </button>
+      </div>
 
       <ScheduledReportsModal
         isOpen={showScheduledReports}

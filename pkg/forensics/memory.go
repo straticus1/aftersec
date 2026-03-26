@@ -1,13 +1,14 @@
 package forensics
 
 import (
+	"aftersec/pkg/client/storage"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 )
 
-func ScanRunningProcesses() ([]ProcessFinding, error) {
+func ScanRunningProcesses(db storage.Manager) ([]ProcessFinding, error) {
 	out, err := exec.Command("ps", "-eo", "pid,user,command", "-ww").CombinedOutput()
 	if err != nil {
 		return nil, err
@@ -70,6 +71,9 @@ func ScanRunningProcesses() ([]ProcessFinding, error) {
 		}
 
 		if score > Safe {
+			if db != nil {
+				db.LogTelemetryEvent("memory_forensics", "process_anomaly", "high", fmt.Sprintf(`{"pid": %d, "process": "%s", "score": %f, "reason": "%s"}`, pid, cmdStr, score, reason))
+			}
 			anomalies = append(anomalies, ProcessFinding{
 				PID:         pid,
 				User:        userStr,
