@@ -15,4 +15,7 @@ const char* get_mount_path(const es_message_t *msg, int *out_len);
 // Responds to an AUTH event and releases the retained message
 void respond_auth_and_release(es_client_t *client, const es_message_t *msg, bool allow, bool cache);
 
+// Retain message with availability check (macOS 11.0+)
+void retain_message_safe(const es_message_t *msg);
+
 #endif

@@ -1,8 +1,8 @@
 package ai
 
 /*
-#cgo CFLAGS: -x objective-c
-#cgo LDFLAGS: -framework Foundation -framework CoreML
+#cgo CFLAGS: -x objective-c -mmacosx-version-min=11.0
+#cgo LDFLAGS: -mmacosx-version-min=11.0 -framework Foundation -framework CoreML
 #include "coreml_wrapper.h"
 #include <stdlib.h>
 */

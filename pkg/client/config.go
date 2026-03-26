@@ -63,6 +63,9 @@ type RemediationConfig struct {
 type AIConfig struct {
 	Provider       string `yaml:"provider"`
 	Model          string `yaml:"model"`
+	OpenAIKey      string `yaml:"openai_key"`
+	AnthropicKey   string `yaml:"anthropic_key"`
+	GeminiKey      string `yaml:"gemini_key"`
 	OpenAIModel    string `yaml:"openai_model"`
 	AnthropicModel string `yaml:"anthropic_model"`
 	GeminiModel    string `yaml:"gemini_model"`
@@ -202,4 +205,13 @@ func LoadConfig(path string) (*ClientConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// SaveConfig writes the given ClientConfig back to yaml
+func SaveConfig(cfg *ClientConfig, path string) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }

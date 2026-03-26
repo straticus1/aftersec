@@ -1,8 +1,8 @@
 package edr
 
 /*
-#cgo CFLAGS: -mmacosx-version-min=10.15
-#cgo LDFLAGS: -mmacosx-version-min=10.15 -framework Foundation -lEndpointSecurity -lbsm
+#cgo CFLAGS: -mmacosx-version-min=11.0
+#cgo LDFLAGS: -mmacosx-version-min=11.0 -framework Foundation -lEndpointSecurity -lbsm
 #include "es_wrapper.h"
 #include <stdlib.h>
 */
@@ -39,7 +39,7 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 	} else if msg.event_type == C.ES_EVENT_TYPE_AUTH_EXEC { // NEW: Interception
 		eventType = EventAuthExec
 		// retain the message because we will respond asynchronously
-		C.es_retain_message(msg)
+		C.retain_message_safe(msg)
 	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_EXIT {
 		eventType = EventNotifyExit
 	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_MOUNT { // DMG/ISO Interception

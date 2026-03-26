@@ -1,6 +1,7 @@
 'use client';
 
-import { 
+import { useEffect, useState } from 'react';
+import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend
 } from 'recharts';
 
@@ -14,9 +15,19 @@ const data = [
 const COLORS = ['#F59E0B', '#EF4444', '#3B82F6', '#10B981'];
 
 export default function ThreatDistributionChart() {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return <div className="h-72 w-full flex items-center justify-center text-gray-400">Loading chart...</div>;
+  }
+
   return (
     <div className="h-72 w-full">
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" minHeight={288}>
         <PieChart>
           <Pie
             data={data}

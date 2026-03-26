@@ -50,12 +50,24 @@ const char* get_mount_path(const es_message_t *msg, int *out_len) {
     return path;
 }
 
+void retain_message_safe(const es_message_t *msg) {
+    if (!msg) return;
+
+    // es_retain_message is available on macOS 11.0+
+    if (@available(macOS 11.0, *)) {
+        es_retain_message(msg);
+    }
+}
+
 void respond_auth_and_release(es_client_t *client, const es_message_t *msg, bool allow, bool cache) {
     if (!client || !msg) return;
-    
+
     es_auth_result_t result = allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY;
     es_respond_auth_result(client, msg, result, cache);
-    
+
     // Release the message since we retained it in Go before going async
-    es_release_message(msg);
+    // es_release_message is available on macOS 11.0+
+    if (@available(macOS 11.0, *)) {
+        es_release_message(msg);
+    }
 }

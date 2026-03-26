@@ -58,7 +58,8 @@ CoreMLModelRef coreml_load_model(const char* model_path, char** error_out) {
             return NULL;
         }
 
-        return (__bridge_retained CoreMLModelRef)model;
+        // Use CFBridgingRetain for proper manual reference counting
+        return (CoreMLModelRef)CFBridgingRetain(model);
     }
 }
 

@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Set consistent macOS deployment target for all builds
+export MACOSX_DEPLOYMENT_TARGET=11.0
+export CGO_CFLAGS="-mmacosx-version-min=11.0"
+export CGO_LDFLAGS="-mmacosx-version-min=11.0"
+
 function clean() {
 	echo "Cleaning..."
 	rm -f bin/aftersec
