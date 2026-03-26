@@ -1,6 +1,7 @@
 package forensics
 
 import (
+	"archive/zip"
 	"debug/macho"
 	"encoding/json"
 	"fmt"
@@ -255,7 +256,142 @@ func AnalyzeAppBundle(appPath string) (*CapabilitiesReport, error) {
 	return report, nil
 }
 
-// AnalyzePath determines if the path is an .app bundle or a raw binary and routes accordingly
+// AnalyzePDF parses a PDF document for embedded malicious markers like JavaScript or Launch actions
+func AnalyzePDF(path string) (*CapabilitiesReport, error) {
+	report := &CapabilitiesReport{
+		Path:        path,
+		ThreatScore: Safe,
+	}
+
+	ent, err := CalculateEntropy(path)
+	if err == nil {
+		report.Entropy = ent
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// Read small chunk just for magic and simple string matching
+	head := make([]byte, 1024*1024)
+	n, _ := f.Read(head)
+	s := string(head[:n])
+
+	capMap := make(map[string]bool)
+
+	indicators := []struct {
+		Keywords []string
+		Threat   Capability
+	}{
+		{[]string{"/JS ", "/JavaScript ", "/JS\r", "/JavaScript\r", "/JS\n", "/JavaScript\n"}, Capability{"Embedded JavaScript", "Contains embedded AcroJS for dynamic execution", "Execution", Suspicious}},
+		{[]string{"/Launch ", "/OpenAction ", "/Launch\r", "/OpenAction\r", "/Launch\n", "/OpenAction\n"}, Capability{"Auto-Execution", "Contains actions that execute automatically upon opening", "Execution", Malicious}},
+		{[]string{"/EmbeddedFiles "}, Capability{"Embedded Objects", "Contains embedded files which could be payloads", "Persistence", Suspicious}},
+	}
+
+	for _, ind := range indicators {
+		for _, kw := range ind.Keywords {
+			if strings.Contains(s, kw) && !capMap[ind.Threat.Name] {
+				capMap[ind.Threat.Name] = true
+				report.Capabilities = append(report.Capabilities, ind.Threat)
+				if ind.Threat.RiskLevel > report.ThreatScore {
+					report.ThreatScore = ind.Threat.RiskLevel
+				}
+			}
+		}
+	}
+
+	return report, nil
+}
+
+// AnalyzeOfficeOOXML parses modern zip-based Office documents (.docx, .xlsx, .pptm)
+func AnalyzeOfficeOOXML(path string) (*CapabilitiesReport, error) {
+	report := &CapabilitiesReport{
+		Path:        path,
+		ThreatScore: Safe,
+	}
+
+	ent, err := CalculateEntropy(path)
+	if err == nil {
+		report.Entropy = ent
+	}
+
+	r, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	hasMacros := false
+	for _, f := range r.File {
+		if strings.HasSuffix(strings.ToLower(f.Name), "vbaproject.bin") {
+			hasMacros = true
+			
+			rc, err := f.Open()
+			if err == nil {
+				buf := make([]byte, 1024*1024)
+				n, _ := rc.Read(buf)
+				rc.Close()
+				s := string(buf[:n])
+				
+				if strings.Contains(s, "AutoOpen") || strings.Contains(s, "Document_Open") || strings.Contains(s, "Workbook_Open") {
+					report.Capabilities = append(report.Capabilities, Capability{"Macro Auto-Execution", "Contains VBA macros that execute automatically", "Execution", Malicious})
+					report.ThreatScore = Malicious
+				}
+				if strings.Contains(s, "CreateObject") || strings.Contains(s, "WScript.Shell") || strings.Contains(s, "Shell") {
+					report.Capabilities = append(report.Capabilities, Capability{"Macro Shell Execution", "VBA macro attempts to execute OS commands or drop objects", "Execution", Malicious})
+					report.ThreatScore = Malicious
+				}
+			}
+		}
+	}
+
+	if hasMacros {
+		report.Capabilities = append(report.Capabilities, Capability{"VBA Macros", "Document contains embedded VBA macros", "Execution", Suspicious})
+		if report.ThreatScore < Suspicious {
+			report.ThreatScore = Suspicious
+		}
+	}
+
+	return report, nil
+}
+
+// AnalyzeOfficeOLE parses legacy Office documents looking for OLE string indicators
+func AnalyzeOfficeOLE(path string) (*CapabilitiesReport, error) {
+	report := &CapabilitiesReport{
+		Path:        path,
+		ThreatScore: Safe,
+	}
+
+	ent, err := CalculateEntropy(path)
+	if err == nil {
+		report.Entropy = ent
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	head := make([]byte, 2*1024*1024)
+	n, _ := f.Read(head)
+	s := string(head[:n])
+
+	if strings.Contains(s, "AutoOpen") || strings.Contains(s, "Document_Open") || strings.Contains(s, "Workbook_Open") {
+		report.Capabilities = append(report.Capabilities, Capability{"Macro Auto-Execution", "Contains VBA macros that execute automatically", "Execution", Malicious})
+		report.ThreatScore = Malicious
+	}
+	if strings.Contains(s, "CreateObject") || strings.Contains(s, "WScript.Shell") {
+		report.Capabilities = append(report.Capabilities, Capability{"Macro Shell Execution", "VBA macro attempts to execute OS commands or drop objects", "Execution", Malicious})
+		report.ThreatScore = Malicious
+	}
+
+	return report, nil
+}
+
+// AnalyzePath determines if the path is an .app bundle, document, or a raw binary and routes accordingly
 func AnalyzePath(path string) (*CapabilitiesReport, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -265,5 +401,33 @@ func AnalyzePath(path string) (*CapabilitiesReport, error) {
 	if info.IsDir() && strings.HasSuffix(strings.ToLower(path), ".app") {
 		return AnalyzeAppBundle(path)
 	}
+
+	lowerPath := strings.ToLower(path)
+	if strings.HasSuffix(lowerPath, ".pdf") {
+		return AnalyzePDF(path)
+	}
+	if strings.HasSuffix(lowerPath, ".docx") || strings.HasSuffix(lowerPath, ".xlsx") || strings.HasSuffix(lowerPath, ".pptm") || strings.HasSuffix(lowerPath, ".docm") || strings.HasSuffix(lowerPath, ".xlsm") || strings.HasSuffix(lowerPath, ".pptm") {
+		return AnalyzeOfficeOOXML(path)
+	}
+	if strings.HasSuffix(lowerPath, ".doc") || strings.HasSuffix(lowerPath, ".xls") || strings.HasSuffix(lowerPath, ".ppt") {
+		return AnalyzeOfficeOLE(path)
+	}
+
+	// Dynamic magic byte fallback
+	f, err := os.Open(path)
+	if err == nil {
+		magic := make([]byte, 8)
+		f.Read(magic)
+		f.Close()
+		
+		if string(magic[:4]) == "%PDF" {
+			return AnalyzePDF(path)
+		}
+		
+		if magic[0] == 0xD0 && magic[1] == 0xCF && magic[2] == 0x11 && magic[3] == 0xE0 && magic[4] == 0xA1 && magic[5] == 0xB1 && magic[6] == 0x1A && magic[7] == 0xE1 {
+			return AnalyzeOfficeOLE(path)
+		}
+	}
+
 	return AnalyzeBinary(path)
 }

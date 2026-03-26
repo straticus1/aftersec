@@ -2,6 +2,7 @@ package client
 
 import (
 	"aftersec/pkg/core"
+	"aftersec/pkg/darkscan"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -108,6 +109,7 @@ type DaemonConfig struct {
 	AI           AIConfig          `yaml:"ai"`
 	EndpointAI   EndpointAIConfig  `yaml:"endpoint_ai"`
 	ThreatIntel  ThreatIntelConfig `yaml:"threat_intel"`
+	DarkScan     darkscan.Config   `yaml:"darkscan"`
 }
 
 // ClientConfig represents the client-side configuration
@@ -175,6 +177,7 @@ func DefaultClientConfig() *ClientConfig {
 				DarkWebKeywords:     []string{},
 				CredentialCheckFreq: "weekly",
 			},
+			DarkScan: *darkscan.DefaultConfig(),
 		},
 		Core: *core.DefaultConfig(),
 	}

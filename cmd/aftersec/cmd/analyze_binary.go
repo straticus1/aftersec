@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -17,6 +18,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"aftersec/pkg/ai"
+	"aftersec/pkg/client"
+	"aftersec/pkg/darkscan"
 	"aftersec/pkg/forensics"
 	"aftersec/pkg/threatintel"
 )
@@ -24,6 +27,7 @@ import (
 var (
 	skipThreatIntel bool
 	skipAI          bool
+	skipDarkScan    bool
 	verbose         bool
 )
 
@@ -97,9 +101,15 @@ Example:
 		iocs := extractStringsAndIOCs(binaryPath)
 		printIOCs(iocs)
 
-		// Phase 6: AI Analysis
+		// Phase 6: Multi-Engine Malware Scanning (DarkScan)
+		if !skipDarkScan {
+			fmt.Println("🛡️  Phase 6: Multi-Engine Malware Scanning")
+			runDarkScan(binaryPath)
+		}
+
+		// Phase 7: AI Analysis
 		if !skipAI {
-			fmt.Println("🤖 Phase 6: AI-Powered Threat Analysis")
+			fmt.Println("🤖 Phase 7: AI-Powered Threat Analysis")
 			runAIAnalysis(binaryPath, hashes, capReport, iocs)
 		}
 
@@ -461,9 +471,89 @@ func runAIAnalysis(path string, hashes *Hashes, report *forensics.CapabilitiesRe
 	fmt.Println()
 }
 
+func runDarkScan(binaryPath string) *darkscan.IntegrationReport {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Printf("  ⚠️  Failed to get home directory: %v\n\n", err)
+		return nil
+	}
+
+	configPath := filepath.Join(home, ".aftersec", "config.yaml")
+	cfg, err := client.LoadConfig(configPath)
+	if err != nil {
+		fmt.Printf("  ⚠️  Failed to load config: %v\n\n", err)
+		return nil
+	}
+
+	if !cfg.Daemon.DarkScan.Enabled {
+		fmt.Println("  ℹ️  DarkScan is disabled in config (enable in ~/.aftersec/config.yaml)")
+		fmt.Println()
+		return nil
+	}
+
+	scanner, err := darkscan.NewClient(&cfg.Daemon.DarkScan)
+	if err != nil {
+		fmt.Printf("  ⚠️  Failed to initialize DarkScan: %v\n\n", err)
+		return nil
+	}
+	defer scanner.Close()
+
+	if scanner.GetEngineCount() == 0 {
+		fmt.Println("  ℹ️  No DarkScan engines enabled (configure ClamAV, YARA, CAPA, or Viper)")
+		fmt.Println()
+		return nil
+	}
+
+	ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 60*time.Second)
+	defer cancel()
+
+	report, err := scanner.ScanWithReport(ctx, binaryPath)
+	if err != nil {
+		fmt.Printf("  ⚠️  DarkScan failed: %v\n\n", err)
+		return report
+	}
+
+	printDarkScanReport(report)
+	return report
+}
+
+func printDarkScanReport(report *darkscan.IntegrationReport) {
+	if report == nil {
+		return
+	}
+
+	threatEmoji := "🟢"
+	switch report.ThreatLevel {
+	case darkscan.ThreatLow:
+		threatEmoji = "🟡"
+	case darkscan.ThreatMedium:
+		threatEmoji = "🟠"
+	case darkscan.ThreatHigh, darkscan.ThreatCritical:
+		threatEmoji = "🔴"
+	}
+
+	fmt.Printf("  Engines: %s\n", strings.Join(report.Engines, ", "))
+	fmt.Printf("  Scan Duration: %s\n", report.ScanDuration)
+	fmt.Printf("  Threat Level: %s %s\n", threatEmoji, report.ThreatLevel)
+
+	if report.Infected && len(report.Threats) > 0 {
+		fmt.Printf("\n  ⚠️  MALWARE DETECTED - %d threat(s) found:\n", len(report.Threats))
+		for _, threat := range report.Threats {
+			fmt.Printf("    [%s] %s\n", threat.Engine, threat.Name)
+			if threat.Description != "" {
+				fmt.Printf("      └─ %s\n", threat.Description)
+			}
+		}
+	} else {
+		fmt.Println("  ✅ No threats detected by DarkScan engines")
+	}
+	fmt.Println()
+}
+
 func init() {
 	analyzeBinaryCmd.Flags().BoolVar(&skipThreatIntel, "skip-threat-intel", false, "Skip threat intelligence lookups")
 	analyzeBinaryCmd.Flags().BoolVar(&skipAI, "skip-ai", false, "Skip AI-powered analysis")
+	analyzeBinaryCmd.Flags().BoolVar(&skipDarkScan, "skip-darkscan", false, "Skip DarkScan multi-engine malware scanning")
 	analyzeBinaryCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show verbose output including all imports")
 
 	rootCmd.AddCommand(analyzeBinaryCmd)
