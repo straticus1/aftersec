@@ -16,7 +16,13 @@ import (
 	"go.starlark.net/starlark"
 )
 
-const RulesDirectory = "/etc/aftersec/rules"
+func getScriptsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/etc/aftersec/scripts"
+	}
+	return filepath.Join(home, ".aftersec", "scripts")
+}
 
 var allowedCommands = map[string][]string{
 	"defaults_read":    {"defaults", "read"},
@@ -30,7 +36,7 @@ var allowedCommands = map[string][]string{
 }
 
 func NumStarlarkRules() int {
-	files, err := os.ReadDir(RulesDirectory)
+	files, err := os.ReadDir(getScriptsDir())
 	if err != nil {
 		return 0
 	}
@@ -44,11 +50,12 @@ func NumStarlarkRules() int {
 }
 
 func ScanStarlark(db storage.Manager, addFinding func(core.Finding)) {
-	if _, err := os.Stat(RulesDirectory); os.IsNotExist(err) {
+	scriptsDir := getScriptsDir()
+	if _, err := os.Stat(scriptsDir); os.IsNotExist(err) {
 		return
 	}
 
-	files, err := os.ReadDir(RulesDirectory)
+	files, err := os.ReadDir(scriptsDir)
 	if err != nil {
 		return
 	}
@@ -58,7 +65,7 @@ func ScanStarlark(db storage.Manager, addFinding func(core.Finding)) {
 			continue
 		}
 
-		path := filepath.Join(RulesDirectory, file.Name())
+		path := filepath.Join(scriptsDir, file.Name())
 		thread := &starlark.Thread{Name: "aftersec-plugin"}
 
 		runCmd := starlark.NewBuiltin("run_command", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {

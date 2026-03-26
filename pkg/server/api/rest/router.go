@@ -72,6 +72,9 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories) *Rou
 		})
 	}))
 
+	// Detonation Engine API
+	mux.HandleFunc("/api/v1/detonate", jwtManager.HTTPMiddleware(router.handleDetonate))
+
 	return router
 }
 

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unsafe"
 )
 
 // ESConsumer manages the Endpoint Security API subscription
@@ -35,9 +36,13 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 	eventType := EventNotifyCreate
 	if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_EXEC {
 		eventType = EventNotifyExec
+	} else if msg.event_type == C.ES_EVENT_TYPE_AUTH_EXEC { // NEW: Interception
+		eventType = EventAuthExec
+		// retain the message because we will respond asynchronously
+		C.es_retain_message(msg)
 	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_EXIT {
 		eventType = EventNotifyExit
-	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_MOUNT { // NEW: DMG/ISO Interception
+	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_MOUNT { // DMG/ISO Interception
 		eventType = EventNotifyMount
 	}
 
@@ -69,6 +74,7 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 		ExecPath:  execPath,
 		MountPath: mountPath,
 		UID:       uid,
+		Msg:       unsafe.Pointer(msg),
 	}
 }
 
@@ -114,5 +120,22 @@ func (c *ESConsumer) Subscribe(events []uint32) error {
 		return fmt.Errorf("failed to subscribe to ES events: %d", res)
 	}
 
+	return nil
+}
+
+// RespondAuth allows or denies an intercepted AUTH event and cleans up the message.
+func (c *ESConsumer) RespondAuth(event ProcessEvent, allow bool, cache bool) error {
+	if c.client == nil {
+		return errors.New("es client not initialized")
+	}
+	if event.Msg == nil {
+		return errors.New("event message pointer is nil, cannot respond")
+	}
+
+	cAllow := C.bool(allow)
+	cCache := C.bool(cache)
+	cMsg := (*C.es_message_t)(event.Msg)
+
+	C.respond_auth_and_release(c.client, cMsg, cAllow, cCache)
 	return nil
 }
