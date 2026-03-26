@@ -491,7 +491,18 @@ func runDarkScan(binaryPath string) *darkscan.IntegrationReport {
 		return nil
 	}
 
-	scanner, err := darkscan.NewClient(&cfg.Daemon.DarkScan)
+	var scanner interface {
+		ScanWithReport(ctx stdcontext.Context, path string) (*darkscan.IntegrationReport, error)
+		GetEngineCount() int
+		Close() error
+	}
+
+	if cfg.Daemon.DarkScan.UseCLI {
+		scanner, err = darkscan.NewCLIClient(&cfg.Daemon.DarkScan, cfg.Daemon.DarkScan.CLIBinaryPath)
+	} else {
+		scanner, err = darkscan.NewClient(&cfg.Daemon.DarkScan)
+	}
+
 	if err != nil {
 		fmt.Printf("  ⚠️  Failed to initialize DarkScan: %v\n\n", err)
 		return nil

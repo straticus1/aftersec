@@ -2,8 +2,10 @@ package darkscan
 
 // Config holds DarkScan integration configuration for AfterSec
 type Config struct {
-	Enabled bool          `yaml:"enabled" json:"enabled"`
-	Engines EnginesConfig `yaml:"engines" json:"engines"`
+	Enabled       bool          `yaml:"enabled" json:"enabled"`
+	UseCLI        bool          `yaml:"use_cli" json:"use_cli"`
+	CLIBinaryPath string        `yaml:"cli_binary_path" json:"cli_binary_path"`
+	Engines       EnginesConfig `yaml:"engines" json:"engines"`
 }
 
 // EnginesConfig configures which scanning engines to enable
@@ -44,7 +46,9 @@ type ViperConfig struct {
 // DefaultConfig returns sensible defaults for DarkScan integration
 func DefaultConfig() *Config {
 	return &Config{
-		Enabled: false,
+		Enabled:       false,
+		UseCLI:        true,
+		CLIBinaryPath: "darkscan",
 		Engines: EnginesConfig{
 			ClamAV: ClamAVConfig{
 				Enabled:      false,
