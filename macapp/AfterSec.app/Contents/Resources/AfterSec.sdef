@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<dictionary title="AfterSec Terminology">
+    <suite name="Standard Suite" code="????" description="Common classes and commands for most applications.">
+        <!-- We can just import the standard suite or declare the application class we need -->
+        <class name="application" code="capp" description="The AfterSec application." inherits="application">
+            <cocoa class="NSApplication"/>
+            <property name="security score" code="aSec" type="integer" access="r" description="The current overall enterprise security score of the endpoint.">
+                <cocoa key="securityScore"/>
+            </property>
+        </class>
+    </suite>
+
+    <suite name="AfterSec Suite" code="aSec" description="AfterSec-specific commands and properties.">
+        <command name="scan" code="aSecScan" description="Initiate an AfterSec scan.">
+            <cocoa class="AfterSec.ScanCommand"/>
+            <parameter name="folder" code="fldr" type="text" optional="yes" description="The specific file or folder path to scan.">
+                <cocoa key="folderPath"/>
+            </parameter>
+        </command>
+
+        <command name="remediate finding" code="aSecRemd" description="Remediate a specific security finding by name.">
+            <cocoa class="AfterSec.RemediateCommand"/>
+            <direct-parameter type="text" description="The name of the finding to remediate (e.g., 'DisableGuestAccount')."/>
+        </command>
+    </suite>
+</dictionary>
