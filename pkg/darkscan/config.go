@@ -15,11 +15,23 @@ type Config struct {
 
 // EnginesConfig configures which scanning engines to enable
 type EnginesConfig struct {
+	Document   DocumentConfig   `yaml:"document" json:"document"`
+	Heuristics HeuristicsConfig `yaml:"heuristics" json:"heuristics"`
 	ClamAV     ClamAVConfig     `yaml:"clamav" json:"clamav"`
 	YARA       YARAConfig       `yaml:"yara" json:"yara"`
 	CAPA       CAPAConfig       `yaml:"capa" json:"capa"`
 	Viper      ViperConfig      `yaml:"viper" json:"viper"`
 	VirusTotal VirusTotalConfig `yaml:"virustotal" json:"virustotal"`
+}
+
+// DocumentConfig configures the Document parsing engine
+type DocumentConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+}
+
+// HeuristicsConfig configures the Heuristics engine
+type HeuristicsConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
 // ClamAVConfig configures the ClamAV engine
@@ -68,6 +80,12 @@ func DefaultConfig() *Config {
 		APIEnabled:     false,
 		APIPort:        8081,
 		Engines: EnginesConfig{
+			Document: DocumentConfig{
+				Enabled: true,
+			},
+			Heuristics: HeuristicsConfig{
+				Enabled: true,
+			},
 			ClamAV: ClamAVConfig{
 				Enabled:      false,
 				DatabasePath: "/usr/local/share/clamav",

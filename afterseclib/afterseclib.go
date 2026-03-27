@@ -9,9 +9,11 @@ import (
 	"aftersec/pkg/ai"
 	"aftersec/pkg/client"
 	"aftersec/pkg/core"
+	"aftersec/pkg/darkscan"
 	"aftersec/pkg/scanners"
 	"context"
 	"encoding/json"
+	"time"
 	"unsafe"
 )
 
@@ -109,6 +111,109 @@ func AnalyzeThreatEvent(eventJSON *C.char) *C.char {
 	
 	resp := map[string]string{"analysis": analysis}
 	data, _ := json.Marshal(resp)
+	return C.CString(string(data))
+}
+
+//export ScanFileForMalware
+func ScanFileForMalware(filePath, configPath *C.char) *C.char {
+	path := C.GoString(filePath)
+	cfgPath := C.GoString(configPath)
+
+	cfg, err := client.LoadConfig(cfgPath)
+	if err != nil {
+		cfg = client.DefaultClientConfig()
+	}
+
+	if !cfg.Daemon.DarkScan.Enabled {
+		return C.CString(`{"error": "DarkScan is disabled"}`)
+	}
+
+	var scanner interface {
+		ScanWithReport(ctx context.Context, path string) (*darkscan.IntegrationReport, error)
+		Close() error
+	}
+
+	if cfg.Daemon.DarkScan.UseCLI {
+		scanner, err = darkscan.NewCLIClient(&cfg.Daemon.DarkScan, cfg.Daemon.DarkScan.CLIBinaryPath)
+	} else {
+		scanner, err = darkscan.NewClient(&cfg.Daemon.DarkScan)
+	}
+
+	if err != nil {
+		return C.CString(`{"error": "` + err.Error() + `"}`)
+	}
+	defer scanner.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	report, err := scanner.ScanWithReport(ctx, path)
+	if err != nil {
+		return C.CString(`{"error": "` + err.Error() + `"}`)
+	}
+
+	data, _ := json.Marshal(report)
+	return C.CString(string(data))
+}
+
+//export GetScanHistory
+func GetScanHistory(configPath *C.char, limit C.int) *C.char {
+	cfgPath := C.GoString(configPath)
+
+	cfg, err := client.LoadConfig(cfgPath)
+	if err != nil {
+		cfg = client.DefaultClientConfig()
+	}
+
+	if !cfg.Daemon.DarkScan.Enabled || !cfg.Daemon.DarkScan.UseCLI {
+		return C.CString(`{"error": "History requires DarkScan CLI mode"}`)
+	}
+
+	scanner, err := darkscan.NewCLIClient(&cfg.Daemon.DarkScan, cfg.Daemon.DarkScan.CLIBinaryPath)
+	if err != nil {
+		return C.CString(`{"error": "` + err.Error() + `"}`)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	history, err := scanner.History(ctx, int(limit))
+	if err != nil {
+		return C.CString(`{"error": "` + err.Error() + `"}`)
+	}
+
+	data, _ := json.Marshal(history)
+	return C.CString(string(data))
+}
+
+//export SearchScanHistory
+func SearchScanHistory(query, configPath *C.char, limit C.int) *C.char {
+	q := C.GoString(query)
+	cfgPath := C.GoString(configPath)
+
+	cfg, err := client.LoadConfig(cfgPath)
+	if err != nil {
+		cfg = client.DefaultClientConfig()
+	}
+
+	if !cfg.Daemon.DarkScan.Enabled || !cfg.Daemon.DarkScan.UseCLI {
+		return C.CString(`{"error": "Search requires DarkScan CLI mode"}`)
+	}
+
+	scanner, err := darkscan.NewCLIClient(&cfg.Daemon.DarkScan, cfg.Daemon.DarkScan.CLIBinaryPath)
+	if err != nil {
+		return C.CString(`{"error": "` + err.Error() + `"}`)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	results, err := scanner.Search(ctx, q, int(limit))
+	if err != nil {
+		return C.CString(`{"error": "` + err.Error() + `"}`)
+	}
+
+	data, _ := json.Marshal(results)
 	return C.CString(string(data))
 }
 

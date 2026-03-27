@@ -295,9 +295,12 @@ func (c *CLIClient) calculateThreatLevel(result *ScanResult) ThreatLevel {
 func (c *CLIClient) getEnabledEngines() []string {
 	var engines []string
 
-	// Document and Heuristics are enabled by default in darkscancli
-	engines = append(engines, "Document", "Heuristics")
-
+	if c.config.Engines.Document.Enabled {
+		engines = append(engines, "Document")
+	}
+	if c.config.Engines.Heuristics.Enabled {
+		engines = append(engines, "Heuristics")
+	}
 	if c.config.Engines.ClamAV.Enabled {
 		engines = append(engines, "ClamAV")
 	}
@@ -316,6 +319,15 @@ func (c *CLIClient) getEnabledEngines() []string {
 
 // addEngineFlags adds engine-specific flags to the command
 func (c *CLIClient) addEngineFlags(args []string) []string {
+	// Document and Heuristics engines are controlled via flags in darkscancli
+	if !c.config.Engines.Document.Enabled {
+		args = append(args, "--document=false")
+	}
+
+	if !c.config.Engines.Heuristics.Enabled {
+		args = append(args, "--heuristics=false")
+	}
+
 	if c.config.Engines.ClamAV.Enabled {
 		args = append(args, "--clamav")
 	}
@@ -344,4 +356,113 @@ func (c *CLIClient) addEngineFlags(args []string) []string {
 // SetConfigPath sets the path to the darkscancli config file
 func (c *CLIClient) SetConfigPath(path string) {
 	c.configPath = path
+}
+
+// HistoryOutput represents the JSON output from darkscancli history command
+type HistoryOutput struct {
+	Summary struct {
+		TotalScans int    `json:"total_scans"`
+		TimeRange  string `json:"time_range"`
+	} `json:"summary"`
+	Scans []HistoryEntry `json:"scans"`
+}
+
+// HistoryEntry represents a single scan history entry
+type HistoryEntry struct {
+	Timestamp    string   `json:"timestamp"`
+	FilePath     string   `json:"file_path"`
+	Infected     bool     `json:"infected"`
+	ThreatCount  int      `json:"threat_count"`
+	ThreatNames  []string `json:"threat_names,omitempty"`
+	EnginesUsed  []string `json:"engines_used"`
+	ScanDuration string   `json:"scan_duration"`
+}
+
+// SearchOutput represents the JSON output from darkscancli search command
+type SearchOutput struct {
+	Summary struct {
+		Query        string `json:"query"`
+		TotalResults int    `json:"total_results"`
+	} `json:"summary"`
+	Results []SearchResult `json:"results"`
+}
+
+// SearchResult represents a single search result
+type SearchResult struct {
+	Timestamp   string       `json:"timestamp"`
+	FilePath    string       `json:"file_path"`
+	FileHash    string       `json:"file_hash,omitempty"`
+	Infected    bool         `json:"infected"`
+	Threats     []CLIThreat  `json:"threats,omitempty"`
+	EnginesUsed []string     `json:"engines_used"`
+}
+
+// History retrieves scan history from darkscancli
+func (c *CLIClient) History(ctx context.Context, limit int) (*HistoryOutput, error) {
+	args := []string{"history", "-o", "json"}
+
+	if limit > 0 {
+		args = append(args, fmt.Sprintf("--limit=%d", limit))
+	}
+
+	if c.configPath != "" {
+		args = append(args, "-c", c.configPath)
+	}
+
+	cmd := exec.CommandContext(ctx, c.binaryPath, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("history timeout: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("darkscancli history failed: %w", err)
+	}
+
+	var historyOutput HistoryOutput
+	outputStr := string(output)
+	jsonStart := strings.Index(outputStr, "{")
+	if jsonStart == -1 {
+		return nil, fmt.Errorf("no JSON output found in history response")
+	}
+
+	if err := json.Unmarshal([]byte(outputStr[jsonStart:]), &historyOutput); err != nil {
+		return nil, fmt.Errorf("failed to parse history JSON: %w", err)
+	}
+
+	return &historyOutput, nil
+}
+
+// Search searches scan history by query
+func (c *CLIClient) Search(ctx context.Context, query string, limit int) (*SearchOutput, error) {
+	args := []string{"search", query, "-o", "json"}
+
+	if limit > 0 {
+		args = append(args, fmt.Sprintf("--limit=%d", limit))
+	}
+
+	if c.configPath != "" {
+		args = append(args, "-c", c.configPath)
+	}
+
+	cmd := exec.CommandContext(ctx, c.binaryPath, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("search timeout: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("darkscancli search failed: %w", err)
+	}
+
+	var searchOutput SearchOutput
+	outputStr := string(output)
+	jsonStart := strings.Index(outputStr, "{")
+	if jsonStart == -1 {
+		return nil, fmt.Errorf("no JSON output found in search response")
+	}
+
+	if err := json.Unmarshal([]byte(outputStr[jsonStart:]), &searchOutput); err != nil {
+		return nil, fmt.Errorf("failed to parse search JSON: %w", err)
+	}
+
+	return &searchOutput, nil
 }

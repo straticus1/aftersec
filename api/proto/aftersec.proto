@@ -11,6 +11,12 @@ service EnterpriseService {
   rpc ConnectCommandStream (stream CommandResult) returns (stream ServerCommand);
 }
 
+service MalwareScanService {
+  rpc ScanFile (ScanRequest) returns (ScanResponse);
+  rpc ScanHistory (HistoryRequest) returns (HistoryResponse);
+  rpc SearchHistory (SearchRequest) returns (SearchResponse);
+}
+
 message EnrollRequest {
   string hardware_id = 1;
   string hostname = 2;
@@ -68,4 +74,69 @@ message ServerCommand {
   string command_id = 1;
   string action = 2; // "EXEC", "REMEDIATE", "LOCK_SCREEN", "WIPE_DATA", "QUARANTINE", "ISOLATE_NETWORK", "FREEZE_PROCESS", "CREATE_SNAPSHOT"
   string payload = 3;
+}
+
+// DarkScan Malware Scanning Messages
+
+message ScanRequest {
+  string file_path = 1;
+  bool recursive = 2;
+  repeated string enabled_engines = 3;
+}
+
+message ScanResponse {
+  string file_path = 1;
+  bool infected = 2;
+  string threat_level = 3;
+  repeated Threat threats = 4;
+  repeated string engines_used = 5;
+  string scan_duration = 6;
+  string error = 7;
+}
+
+message Threat {
+  string name = 1;
+  string severity = 2;
+  string description = 3;
+  string engine = 4;
+}
+
+message HistoryRequest {
+  int32 limit = 1;
+}
+
+message HistoryResponse {
+  int32 total_scans = 1;
+  string time_range = 2;
+  repeated HistoryEntry scans = 3;
+}
+
+message HistoryEntry {
+  string timestamp = 1;
+  string file_path = 2;
+  bool infected = 3;
+  int32 threat_count = 4;
+  repeated string threat_names = 5;
+  repeated string engines_used = 6;
+  string scan_duration = 7;
+}
+
+message SearchRequest {
+  string query = 1;
+  int32 limit = 2;
+}
+
+message SearchResponse {
+  string query = 1;
+  int32 total_results = 2;
+  repeated SearchResult results = 3;
+}
+
+message SearchResult {
+  string timestamp = 1;
+  string file_path = 2;
+  string file_hash = 3;
+  bool infected = 4;
+  repeated Threat threats = 5;
+  repeated string engines_used = 6;
 }
