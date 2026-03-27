@@ -2,9 +2,12 @@ package modes
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	"aftersec/pkg/client/storage"
 	"aftersec/pkg/forensics"
 	"aftersec/pkg/scanners"
+	"aftersec/pkg/telemetry"
 )
 
 // RunEnterprise starts the daemon in enterprise mode
@@ -63,7 +67,25 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager) {
 			return
 		}
 
-		if resp.PolicyUpdated {
+		if strings.HasPrefix(resp.Action, "RUN_SIGMA::") {
+			log.Println("⚡️ Fleet Command Received: RUN_SIGMA")
+			sigmaB64 := strings.TrimPrefix(resp.Action, "RUN_SIGMA::")
+			if yamlBytes, err := base64.StdEncoding.DecodeString(sigmaB64); err == nil {
+				if rule, err := telemetry.ParseSigmaRule(yamlBytes); err == nil {
+					sqliteMgr, ok := mgr.(*storage.SQLiteManager)
+					if ok {
+						events, _ := telemetry.RunHunt(sqliteMgr, rule)
+						if len(events) > 0 {
+							log.Printf("🚨 Sigma Hunt MATCHED %d internal events! Queuing for upload...", len(events))
+							detailsBytes, _ := json.Marshal(events)
+							mgr.LogTelemetryEvent("Sigma Fleet Hunt", "sigma_match", "CRITICAL", string(detailsBytes))
+						} else {
+							log.Println("✅ Sigma Hunt finished safely with no matches.")
+						}
+					}
+				}
+			}
+		} else if resp.PolicyUpdated {
 			log.Printf("Policy updated! New hash: %s. Action required: %s", resp.NewPolicyHash, resp.Action)
 			// In a full implementation, we would instruct `mgr` (CacheManager) to fetch the new Starlark policies
 		} else {

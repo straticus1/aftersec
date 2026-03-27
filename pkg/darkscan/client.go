@@ -4,18 +4,26 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
+	"time"
 
-	dsscanner "github.com/afterdarktech/darkscan/pkg/scanner"
-	dsclamav "github.com/afterdarktech/darkscan/pkg/clamav"
-	dsyara "github.com/afterdarktech/darkscan/pkg/yara"
 	dscapa "github.com/afterdarktech/darkscan/pkg/capa"
+	dsclamav "github.com/afterdarktech/darkscan/pkg/clamav"
+	dsscanner "github.com/afterdarktech/darkscan/pkg/scanner"
 	dsviper "github.com/afterdarktech/darkscan/pkg/viper"
+	dsyara "github.com/afterdarktech/darkscan/pkg/yara"
 )
+
+type cacheEntry struct {
+	Result    *ScanResult
+	Timestamp time.Time
+}
 
 // Client wraps the DarkScan scanner with AfterSec-specific integration
 type Client struct {
 	scanner *dsscanner.Scanner
 	config  *Config
+	cache   sync.Map
 }
 
 // ScanResult represents unified scan results from DarkScan
@@ -121,6 +129,23 @@ func (c *Client) initializeEngines() error {
 
 // ScanFile scans a single file with all enabled engines
 func (c *Client) ScanFile(ctx context.Context, path string) (*ScanResult, error) {
+	if c.config.CacheEnabled {
+		if info, err := os.Stat(path); err == nil {
+			cacheKey := path + "_" + info.ModTime().String()
+			if val, ok := c.cache.Load(cacheKey); ok {
+				entry := val.(cacheEntry)
+				ttl, parseErr := time.ParseDuration(c.config.CacheTTL)
+				if parseErr != nil || ttl == 0 {
+					ttl = 24 * time.Hour
+				}
+				if time.Since(entry.Timestamp) < ttl {
+					return entry.Result, nil
+				}
+				c.cache.Delete(cacheKey)
+			}
+		}
+	}
+
 	results, err := c.scanner.ScanFile(ctx, path)
 	if err != nil {
 		return &ScanResult{
@@ -129,7 +154,19 @@ func (c *Client) ScanFile(ctx context.Context, path string) (*ScanResult, error)
 		}, err
 	}
 
-	return c.aggregateResults(path, results), nil
+	aggregated := c.aggregateResults(path, results)
+
+	if c.config.CacheEnabled {
+		if info, err := os.Stat(path); err == nil {
+			cacheKey := path + "_" + info.ModTime().String()
+			c.cache.Store(cacheKey, cacheEntry{
+				Result:    aggregated,
+				Timestamp: time.Now(),
+			})
+		}
+	}
+
+	return aggregated, nil
 }
 
 // ScanDirectory scans a directory recursively with all enabled engines

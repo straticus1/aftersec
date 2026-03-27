@@ -2,18 +2,24 @@ package darkscan
 
 // Config holds DarkScan integration configuration for AfterSec
 type Config struct {
-	Enabled       bool          `yaml:"enabled" json:"enabled"`
-	UseCLI        bool          `yaml:"use_cli" json:"use_cli"`
-	CLIBinaryPath string        `yaml:"cli_binary_path" json:"cli_binary_path"`
-	Engines       EnginesConfig `yaml:"engines" json:"engines"`
+	Enabled        bool          `yaml:"enabled" json:"enabled"`
+	UseCLI         bool          `yaml:"use_cli" json:"use_cli"`
+	CLIBinaryPath  string        `yaml:"cli_binary_path" json:"cli_binary_path"`
+	QuarantinePath string        `yaml:"quarantine_path" json:"quarantine_path"`
+	CacheEnabled   bool          `yaml:"cache_enabled" json:"cache_enabled"`
+	CacheTTL       string        `yaml:"cache_ttl" json:"cache_ttl"`
+	APIEnabled     bool          `yaml:"api_enabled" json:"api_enabled"`
+	APIPort        int           `yaml:"api_port" json:"api_port"`
+	Engines        EnginesConfig `yaml:"engines" json:"engines"`
 }
 
 // EnginesConfig configures which scanning engines to enable
 type EnginesConfig struct {
-	ClamAV ClamAVConfig `yaml:"clamav" json:"clamav"`
-	YARA   YARAConfig   `yaml:"yara" json:"yara"`
-	CAPA   CAPAConfig   `yaml:"capa" json:"capa"`
-	Viper  ViperConfig  `yaml:"viper" json:"viper"`
+	ClamAV     ClamAVConfig     `yaml:"clamav" json:"clamav"`
+	YARA       YARAConfig       `yaml:"yara" json:"yara"`
+	CAPA       CAPAConfig       `yaml:"capa" json:"capa"`
+	Viper      ViperConfig      `yaml:"viper" json:"viper"`
+	VirusTotal VirusTotalConfig `yaml:"virustotal" json:"virustotal"`
 }
 
 // ClamAVConfig configures the ClamAV engine
@@ -44,12 +50,23 @@ type ViperConfig struct {
 	ProjectName string `yaml:"project_name" json:"project_name"`
 }
 
+// VirusTotalConfig configures the VirusTotal engine
+type VirusTotalConfig struct {
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	APIKey  string `yaml:"api_key" json:"api_key"`
+}
+
 // DefaultConfig returns sensible defaults for DarkScan integration
 func DefaultConfig() *Config {
 	return &Config{
-		Enabled:       false,
-		UseCLI:        true,
-		CLIBinaryPath: "darkscan",
+		Enabled:        false,
+		UseCLI:         true,
+		CLIBinaryPath:  "darkscan",
+		QuarantinePath: "quarantine",
+		CacheEnabled:   true,
+		CacheTTL:       "24h",
+		APIEnabled:     false,
+		APIPort:        8081,
 		Engines: EnginesConfig{
 			ClamAV: ClamAVConfig{
 				Enabled:      false,
@@ -69,6 +86,10 @@ func DefaultConfig() *Config {
 				Enabled:     false,
 				ExePath:     "viper-cli",
 				ProjectName: "aftersec",
+			},
+			VirusTotal: VirusTotalConfig{
+				Enabled: false,
+				APIKey:  "",
 			},
 		},
 	}

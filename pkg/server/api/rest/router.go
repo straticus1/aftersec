@@ -6,6 +6,7 @@ import (
 
 	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/clamav"
+	grpcserver "aftersec/pkg/server/grpc"
 	"aftersec/pkg/server/repository"
 )
 
@@ -14,10 +15,11 @@ type Router struct {
 	mux           *http.ServeMux
 	repos         *repository.Repositories
 	clamavHandler *ClamAVHandler
+	enterpriseSrv *grpcserver.Server
 }
 
 // NewRouter initializes a fresh API layout
-func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, clamavStorage *clamav.Storage, clamavUpdater *clamav.Updater) *Router {
+func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, enterpriseSrv *grpcserver.Server, clamavStorage *clamav.Storage, clamavUpdater *clamav.Updater) *Router {
 	mux := http.NewServeMux()
 
 	// Public Health Endpoint
@@ -83,6 +85,13 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, clam
 			"delivery_target": "sub-second",
 		})
 	}))
+
+	// Sigma API
+	mux.HandleFunc("/api/v1/sigma/deploy", jwtManager.HTTPMiddleware(router.handleSigmaDeploy))
+
+	// MISP Threat Intel API
+	mux.HandleFunc("/api/v1/misp/config", jwtManager.HTTPMiddleware(router.handleMISPConfig))
+	mux.HandleFunc("/api/v1/misp/sync", jwtManager.HTTPMiddleware(router.handleMISPSync))
 
 	// Detonation Engine API
 	mux.HandleFunc("/api/v1/detonate", jwtManager.HTTPMiddleware(router.handleDetonate))

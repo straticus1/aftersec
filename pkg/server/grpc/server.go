@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"encoding/base64"
 	"log"
 	"sync"
 
@@ -14,9 +15,22 @@ import (
 type Server struct {
 	grpcapi.UnimplementedEnterpriseServiceServer
 	repos         *repository.Repositories
-	eventQueue    chan *grpcapi.ClientEvent
-	mu            sync.RWMutex
-	activeStreams map[string]chan *grpcapi.ServerCommand
+	eventQueue       chan *grpcapi.ClientEvent
+	mu               sync.RWMutex
+	activeStreams    map[string]chan *grpcapi.ServerCommand
+	pendingSigmaRule string
+}
+
+func (s *Server) SetPendingSigmaRule(rule string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pendingSigmaRule = rule
+}
+
+func (s *Server) GetPendingSigmaRule() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pendingSigmaRule
 }
 
 func NewServer(repos *repository.Repositories) *Server {
@@ -53,11 +67,16 @@ func (s *Server) Heartbeat(ctx context.Context, req *grpcapi.HeartbeatRequest) (
 		return nil, status.Error(codes.Unauthenticated, "missing tenant_id")
 	}
 
+	action := "NONE"
+	if rule := s.GetPendingSigmaRule(); rule != "" {
+		action = "RUN_SIGMA::" + base64.StdEncoding.EncodeToString([]byte(rule))
+	}
+
 	// Stub heartbeat tracking
 	return &grpcapi.HeartbeatResponse{
 		PolicyUpdated: false,
 		NewPolicyHash: "",
-		Action:        "NONE",
+		Action:        action,
 	}, nil
 }
 

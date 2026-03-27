@@ -72,8 +72,10 @@ func main() {
 		log.Println("ClamAV definition updater disabled (set CLAMAV_UPDATER_ENABLED=true to enable)")
 	}
 
+	enterpriseSrv := grpcserver.NewServer(repos)
+
 	// 2. Start basic REST API
-	mux := rest.NewRouter(jwtManager, repos, clamavStorage, clamavUpdater)
+	mux := rest.NewRouter(jwtManager, repos, enterpriseSrv, clamavStorage, clamavUpdater)
 
 	go func() {
 		log.Println("Listening for REST API on :8080")
@@ -108,7 +110,6 @@ func main() {
 		grpc.StreamInterceptor(jwtManager.GRPCStreamInterceptor),
 	)
 	
-	enterpriseSrv := grpcserver.NewServer(repos)
 	grpcapi.RegisterEnterpriseServiceServer(grpcServerInstance, enterpriseSrv)
 
 	log.Println("Listening for AfterSec gRPC Endpoints on :9090")

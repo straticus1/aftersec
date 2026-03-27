@@ -3,6 +3,7 @@ package client
 import (
 	"aftersec/pkg/core"
 	"aftersec/pkg/darkscan"
+	"aftersec/pkg/threatintel"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,10 +79,11 @@ type ThreatIntelConfig struct {
 	CheckCredentials    bool     `yaml:"check_credentials"`
 	CheckFileHashes     bool     `yaml:"check_file_hashes"`
 	CheckNetworkIOCs    bool     `yaml:"check_network_iocs"`
-	MonitorDarkWeb      bool     `yaml:"monitor_dark_web"`
-	DarkWebKeywords     []string `yaml:"darkweb_keywords"`
-	OrganizationDomain  string   `yaml:"organization_domain"`
-	CredentialCheckFreq string   `yaml:"credential_check_freq"` // daily, weekly, monthly
+	MonitorDarkWeb      bool                   `yaml:"monitor_dark_web"`
+	DarkWebKeywords     []string               `yaml:"darkweb_keywords"`
+	OrganizationDomain  string                 `yaml:"organization_domain"`
+	CredentialCheckFreq string                 `yaml:"credential_check_freq"` // daily, weekly, monthly
+	MISP                threatintel.MISPConfig `yaml:"misp"`
 }
 
 type EndpointAIMode string
@@ -176,6 +178,11 @@ func DefaultClientConfig() *ClientConfig {
 				MonitorDarkWeb:      false, // Opt-in due to API costs
 				DarkWebKeywords:     []string{},
 				CredentialCheckFreq: "weekly",
+				MISP: threatintel.MISPConfig{
+					Enabled: false,
+					BaseURL: "https://misp.local",
+					AuthKey: "",
+				},
 			},
 			DarkScan: *darkscan.DefaultConfig(),
 		},

@@ -22,6 +22,7 @@ import (
 	"aftersec/pkg/darkscan"
 	"aftersec/pkg/forensics"
 	"aftersec/pkg/threatintel"
+	dsforensics "github.com/afterdarktech/darkscan/pkg/forensics"
 )
 
 var (
@@ -90,6 +91,94 @@ Example:
 			printCapabilityReport(capReport)
 		}
 
+		// Phase 3.5: DarkScan Deep Forensics & Heuristics
+		fmt.Println("🧬 Phase 3.5: DarkScan Deep Forensics & Heuristics")
+		dsAnalyzer := dsforensics.NewAnalyzer(100)
+		feats, err := dsAnalyzer.Analyze(binaryPath)
+		if err != nil {
+			fmt.Printf("  ⚠️  DarkScan forensics failed: %v\n\n", err)
+		} else {
+			score := 0
+			var behaviors []string
+			if feats.Entropy > 7.0 {
+				score += 30
+				behaviors = append(behaviors, "High Entropy (Potential Packing/Encryption)")
+			}
+			if feats.HasInjection {
+				score += 40
+				behaviors = append(behaviors, "Process Injection API usage [T1055]")
+			}
+			if feats.HasEvasion {
+				score += 20
+				behaviors = append(behaviors, "Sandbox/Debug evasion API usage [T1497]")
+			}
+			if feats.HasExecutableStack {
+				score += 50
+				behaviors = append(behaviors, "Executable Stack detected (Exploitation artifact)")
+			}
+			if feats.HasNetworkCalls {
+				behaviors = append(behaviors, "Network Communication APIs [T1043]")
+				score += 10
+			}
+			if feats.HasPersistence {
+				behaviors = append(behaviors, "Persistence Mechanisms [T1547]")
+				score += 20
+			}
+			if feats.HasCrypto {
+				behaviors = append(behaviors, "Cryptographic API usage (Ransomware/C2) [T1486]")
+				score += 10
+			}
+
+			if score > 100 {
+				score = 100
+			}
+
+			riskEmoji := "🟢"
+			if score >= 60 {
+				riskEmoji = "🔴"
+			} else if score >= 30 {
+				riskEmoji = "🟡"
+			}
+
+			fmt.Printf("  Heuristic Risk Score: %s %d/100\n", riskEmoji, score)
+			if len(behaviors) > 0 {
+				fmt.Printf("  MITRE ATT&CK Mapped Behaviors (%d):\n", len(behaviors))
+				for _, b := range behaviors {
+					fmt.Printf("    • %s\n", b)
+				}
+			} else {
+				fmt.Println("  No highly suspicious heuristic behaviors detected.")
+			}
+			fmt.Println()
+		}
+
+		// Phase 3.7: Microscopic CPU Emulation (Unicorn)
+		fmt.Println("🦄 Phase 3.7: Microscopic CPU Emulation Sandbox")
+		emuCtx, emuCancel := stdcontext.WithTimeout(stdcontext.Background(), 2*time.Minute)
+		emuReport, err := forensics.EmulateMachO(emuCtx, binaryPath)
+		emuCancel()
+		
+		if err != nil {
+			fmt.Printf("  ⚠️  Sandbox execution aborted: %v\n\n", err)
+		} else {
+			fmt.Printf("  Architecture:   %s\n", emuReport.Architecture)
+			fmt.Printf("  Instructions:   %d (simulated)\n", emuReport.Instructions)
+			fmt.Printf("  Syscalls/Traps: %d\n", emuReport.Syscalls)
+			fmt.Printf("  Unpacking Loops:%d\n", emuReport.UnpackingLoops)
+			
+			threatEmoji := "🟢"
+			if emuReport.Score >= 50 {
+				threatEmoji = "🔴"
+			} else if emuReport.Score >= 20 {
+				threatEmoji = "🟡"
+			}
+			fmt.Printf("  Heuristic Intent Score: %s %d/100\n", threatEmoji, emuReport.Score)
+			if emuReport.HasError {
+				fmt.Printf("  Simulation halted: %s\n", emuReport.ErrorMessage)
+			}
+			fmt.Println()
+		}
+
 		// Phase 4: Threat Intelligence Lookup
 		if !skipThreatIntel {
 			fmt.Println("🌐 Phase 4: Global Threat Intelligence")
@@ -100,6 +189,21 @@ Example:
 		fmt.Println("🔤 Phase 5: String Extraction & IOC Detection")
 		iocs := extractStringsAndIOCs(binaryPath)
 		printIOCs(iocs)
+
+		if forensics.IsFlossInstalled() {
+			fmt.Println("🔍 Phase 5.5: Deep String Deobfuscation (FLOSS)")
+			ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 2*time.Minute)
+			flossRes, err := forensics.ExtractFLOSS(ctx, binaryPath)
+			cancel()
+			if err != nil {
+				fmt.Printf("  ⚠️  FLOSS analysis failed: %v\n\n", err)
+			} else {
+				printFlossStrings(flossRes)
+			}
+		} else {
+			fmt.Println("🔍 Phase 5.5: Deep String Deobfuscation (FLOSS) [SKIPPED - 'floss' binary not in PATH]")
+			fmt.Println()
+		}
 
 		// Phase 6: Multi-Engine Malware Scanning (DarkScan)
 		if !skipDarkScan {
@@ -364,7 +468,8 @@ func extractStringsAndIOCs(path string) *IOCs {
 
 func printIOCs(iocs *IOCs) {
 	if iocs == nil {
-		fmt.Println("  No IOCs detected\n")
+		fmt.Println("  No IOCs detected")
+		fmt.Println()
 		return
 	}
 
@@ -424,6 +529,55 @@ func printIOCs(iocs *IOCs) {
 
 	if !hasIOCs {
 		fmt.Println("  ✅ No suspicious indicators detected")
+	}
+	fmt.Println()
+}
+
+func printFlossStrings(res *forensics.FlossResult) {
+	if res == nil {
+		return
+	}
+
+	total := len(res.DecodedStrings) + len(res.StackStrings) + len(res.TightStrings)
+	if total == 0 {
+		fmt.Println("  ✅ No obfuscated or hidden strings detected")
+		fmt.Println()
+		return
+	}
+
+	fmt.Printf("  ⚠️  Obfuscated Strings Recovered (%d):\n", total)
+	
+	if len(res.DecodedStrings) > 0 {
+		fmt.Printf("    🧬 Decoded Strings (%d):\n", len(res.DecodedStrings))
+		for i, s := range res.DecodedStrings {
+			if i >= 10 {
+				fmt.Printf("      ... (%d more)\n", len(res.DecodedStrings)-10)
+				break
+			}
+			fmt.Printf("      • %s\n", s)
+		}
+	}
+
+	if len(res.StackStrings) > 0 {
+		fmt.Printf("    📚 Stack Strings (%d):\n", len(res.StackStrings))
+		for i, s := range res.StackStrings {
+			if i >= 10 {
+				fmt.Printf("      ... (%d more)\n", len(res.StackStrings)-10)
+				break
+			}
+			fmt.Printf("      • %s\n", s)
+		}
+	}
+
+	if len(res.TightStrings) > 0 {
+		fmt.Printf("    🗜️ Tight Strings (%d):\n", len(res.TightStrings))
+		for i, s := range res.TightStrings {
+			if i >= 10 {
+				fmt.Printf("      ... (%d more)\n", len(res.TightStrings)-10)
+				break
+			}
+			fmt.Printf("      • %s\n", s)
+		}
 	}
 	fmt.Println()
 }

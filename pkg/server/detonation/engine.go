@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"aftersec/pkg/threatintel"
+	"aftersec/pkg/forensics"
+	"aftersec/pkg/darkscan"
 )
 
 type Verdict string
@@ -24,13 +26,16 @@ type AnalysisResult struct {
 	Hash             string  `json:"hash"`
 	Verdict          Verdict `json:"verdict"`
 	Score            int     `json:"score"`
-	ThreatIntelMatch bool    `json:"threat_intel_match"`
-	Source           string  `json:"source,omitempty"` // "filehashes", "darkapi", "local"
+	ThreatIntelMatch bool     `json:"threat_intel_match"`
+	Source           string   `json:"source,omitempty"` // "filehashes", "darkapi", "local"
+	FlossStrings     []string `json:"floss_strings,omitempty"`
+	DarkScanThreats  []string `json:"darkscan_threats,omitempty"`
 }
 
 type Engine struct {
 	fileHashesClient *threatintel.FileHashesClient
 	darkAPIClient    *threatintel.DarkAPIClient
+	dsClient         *darkscan.Client
 }
 
 func NewEngine() *Engine {
@@ -51,16 +56,37 @@ func NewEngine() *Engine {
 		}
 	}
 
+	// Initialize DarkScan Multi-Engine for local detonation
+	// In a real enterprise deployment, these paths would be pulled from server config.
+	dsc, err := darkscan.NewClient(darkscan.DefaultConfig())
+	if err == nil {
+		engine.dsClient = dsc
+		log.Println("✅ [DETONATION] DarkScan Local Engine initialized (ClamAV/YARA/CAPA)")
+	} else {
+		log.Printf("⚠️ [DETONATION] DarkScan failed to initialize: %v", err)
+	}
+
 	return engine
 }
 
 // Analyze performs multi-layered threat analysis on a binary
 func (e *Engine) Analyze(r io.Reader) (*AnalysisResult, error) {
-	hasher := sha256.New()
-	size, err := io.Copy(hasher, r)
+	tmpFile, err := os.CreateTemp("", "detonation-*")
 	if err != nil {
 		return nil, err
 	}
+	defer os.Remove(tmpFile.Name())
+
+	hasher := sha256.New()
+	mw := io.MultiWriter(hasher, tmpFile)
+
+	size, err := io.Copy(mw, r)
+	if err != nil {
+		tmpFile.Close()
+		return nil, err
+	}
+	tmpFile.Close()
+
 	hashStr := hex.EncodeToString(hasher.Sum(nil))
 
 	result := &AnalysisResult{
@@ -120,6 +146,60 @@ func (e *Engine) Analyze(r io.Reader) (*AnalysisResult, error) {
 		result.Score = 100
 		result.Source = "local"
 		log.Printf("🛑 [LOCAL] BLOCKED: Suspicious binary size: %d bytes", size)
+	}
+
+	// Phase 4: FLOSS String Deobfuscation
+	if forensics.IsFlossInstalled() {
+		flossCtx, flossCancel := context.WithTimeout(ctx, 3*time.Minute)
+		defer flossCancel()
+		
+		flossRes, err := forensics.ExtractFLOSS(flossCtx, tmpFile.Name())
+		if err == nil && flossRes != nil {
+			log.Printf("🧬 [FLOSS] Deobfuscated strings extracted for %s", hashStr[:16])
+			result.FlossStrings = append(result.FlossStrings, flossRes.DecodedStrings...)
+			result.FlossStrings = append(result.FlossStrings, flossRes.StackStrings...)
+			result.FlossStrings = append(result.FlossStrings, flossRes.TightStrings...)
+		}
+	}
+
+	// Phase 4.5: Microscopic CPU Sandbox (Unicorn)
+	emuCtx, emuCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer emuCancel()
+	
+	emuRes, err := forensics.EmulateMachO(emuCtx, tmpFile.Name())
+	if err == nil && emuRes != nil {
+		log.Printf("🦄 [EMULATOR] Mapped Mach-O and emulated %d instructions (Syscalls: %d, Loops: %d)", 
+			emuRes.Instructions, emuRes.Syscalls, emuRes.UnpackingLoops)
+		
+		if emuRes.Score >= 50 {
+			result.Verdict = VerdictDeny
+			result.Score = 100
+			result.Source = "unicorn"
+			log.Printf("🛑 [EMULATOR] BLOCKED: High-entropy execution behavior detected (Score: %d)", emuRes.Score)
+		} else if emuRes.Score >= 20 {
+			result.Score += emuRes.Score
+		}
+	} else if err != nil {
+		// Log but don't fail detonation if binary is not Mach-O or Unicorn crashes
+		log.Printf("ℹ️ [EMULATOR] Sandbox execution skipped/failed: %v", err)
+	}
+
+	// Phase 5: DarkScan Multi-Engine (ClamAV/YARA/CAPA)
+	if e.dsClient != nil && result.Verdict == VerdictAllow {
+		dsCtx, dsCancel := context.WithTimeout(ctx, 45*time.Second)
+		defer dsCancel()
+		
+		scanRes, err := e.dsClient.ScanFile(dsCtx, tmpFile.Name())
+		if err == nil && scanRes != nil && scanRes.Infected {
+			result.Verdict = VerdictDeny
+			result.Score = 100
+			result.Source = "darkscan"
+			for _, t := range scanRes.Threats {
+				threatStr := fmt.Sprintf("[%s] %s", t.Engine, t.Name)
+				result.DarkScanThreats = append(result.DarkScanThreats, threatStr)
+			}
+			log.Printf("🛑 [DARKSCAN] BLOCKED: Found %d malicious signatures in %s", len(scanRes.Threats), hashStr[:16])
+		}
 	}
 
 	if result.Verdict == VerdictAllow {
