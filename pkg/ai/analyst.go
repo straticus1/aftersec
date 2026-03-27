@@ -78,6 +78,9 @@ func InitGenkit(ctx context.Context, cfg *client.ClientConfig) error {
 }
 
 func analyzeThreatInternal(ctx context.Context, threatJSON string) (string, error) {
+	if g == nil {
+		return "", fmt.Errorf("Genkit flow not initialized")
+	}
 	prompt := fmt.Sprintf(`You are a macOS security analyst. Analyze the following security telemetry finding and explain the potential threat in one or two concise sentences.
 Then, provide the exact macOS terminal command to stop or remove it safely formatted exactly like this:
 
@@ -288,6 +291,9 @@ Reports:
 
 // AnalyzeBinarySemantics profiles a binary using NLP string extraction
 func AnalyzeBinarySemantics(ctx context.Context, stringsOutput string) (string, error) {
+	if g == nil {
+		return "", fmt.Errorf("Genkit flow not initialized")
+	}
 	prompt := fmt.Sprintf(`You are a top-tier malware reverse engineer. Look at these extracted string constants from a macOS executable. State definitively if this looks like malware, a credential stealer, or a legitimate app based on semantic intent and function names.
 Strings Dump:
 %s`, stringsOutput)
@@ -298,6 +304,9 @@ Strings Dump:
 
 // GenerateHoneypotContent orchestrates dynamic deception files
 func GenerateHoneypotContent(ctx context.Context, decoyType string) (string, error) {
+	if g == nil {
+		return "", fmt.Errorf("Genkit flow not initialized")
+	}
 	prompt := fmt.Sprintf(`Generate extremely realistic, fully functioning fake content for a decoy file of type: %s. Do not include markdown formatting or explanations; output ONLY the raw file contents so it can be written perfectly to disk. Make it look irresistible to a hacker.`, decoyType)
 	resp, err := genkit.Generate(ctx, g, ai.WithModelName(activeModel), ai.WithPrompt(prompt))
 	if err != nil { return "", err }
