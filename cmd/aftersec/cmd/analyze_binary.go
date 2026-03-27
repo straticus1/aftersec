@@ -689,11 +689,11 @@ func printDarkScanReport(report *darkscan.IntegrationReport) {
 
 	threatEmoji := "🟢"
 	switch report.ThreatLevel {
-	case darkscan.ThreatLow:
+	case darkscan.ThreatLevelLow:
 		threatEmoji = "🟡"
-	case darkscan.ThreatMedium:
+	case darkscan.ThreatLevelMedium:
 		threatEmoji = "🟠"
-	case darkscan.ThreatHigh, darkscan.ThreatCritical:
+	case darkscan.ThreatLevelHigh, darkscan.ThreatLevelCritical:
 		threatEmoji = "🔴"
 	}
 

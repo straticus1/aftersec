@@ -65,9 +65,9 @@ func AnalyzeWithDarkScan(ctx context.Context, path string, dsClient *darkscan.Cl
 		// Elevate threat score if DarkScan detects malware
 		if report.Infected {
 			switch report.ThreatLevel {
-			case darkscan.ThreatCritical, darkscan.ThreatHigh:
+			case darkscan.ThreatLevelCritical, darkscan.ThreatLevelHigh:
 				enhanced.ThreatScore = Malicious
-			case darkscan.ThreatMedium:
+			case darkscan.ThreatLevelMedium:
 				if enhanced.ThreatScore < Suspicious {
 					enhanced.ThreatScore = Suspicious
 				}

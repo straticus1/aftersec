@@ -178,13 +178,13 @@ func (c *CLIClient) RealTimeScan(ctx context.Context, path string, timeoutSecond
 	result, err := c.ScanFile(scanCtx, path)
 	if err != nil {
 		if err == context.DeadlineExceeded {
-			return false, ThreatNone, fmt.Errorf("scan timeout after %d seconds", timeoutSeconds)
+			return false, ThreatLevelNone, fmt.Errorf("scan timeout after %d seconds", timeoutSeconds)
 		}
-		return false, ThreatNone, err
+		return false, ThreatLevelNone, err
 	}
 
 	threatLevel := c.calculateThreatLevel(result)
-	shouldBlock := result.Infected && threatLevel >= ThreatHigh
+	shouldBlock := result.Infected && threatLevel >= ThreatLevelHigh
 
 	return shouldBlock, threatLevel, nil
 }
@@ -272,10 +272,10 @@ func (c *CLIClient) convertCLIResult(cliResult *CLIFileResult) *ScanResult {
 // calculateThreatLevel determines overall threat level from scan results
 func (c *CLIClient) calculateThreatLevel(result *ScanResult) ThreatLevel {
 	if !result.Infected || len(result.Threats) == 0 {
-		return ThreatNone
+		return ThreatLevelNone
 	}
 
-	maxLevel := ThreatLow
+	maxLevel := ThreatLevelLow
 
 	for _, threat := range result.Threats {
 		level := parseThreatSeverity(threat.Severity)
@@ -284,7 +284,7 @@ func (c *CLIClient) calculateThreatLevel(result *ScanResult) ThreatLevel {
 		}
 	}
 
-	if result.EngineCount >= 2 && len(result.Threats) > 0 && maxLevel < ThreatCritical {
+	if result.EngineCount >= 2 && len(result.Threats) > 0 && maxLevel < ThreatLevelCritical {
 		maxLevel++
 	}
 
@@ -466,3 +466,130 @@ func (c *CLIClient) Search(ctx context.Context, query string, limit int) (*Searc
 
 	return &searchOutput, nil
 }
+
+// Stub methods for DarkScanClient interface - to be implemented in later phases
+
+func (c *CLIClient) ScanBrowserPrivacy(ctx context.Context, browsers []string) ([]*PrivacyScanResult, error) {
+	return nil, fmt.Errorf("privacy scanning not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) ScanApplicationTelemetry(ctx context.Context, appPath string) (*PrivacyScanResult, error) {
+	return nil, fmt.Errorf("telemetry scanning not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) ListPrivacyFindings(ctx context.Context, filters PrivacyFilter) ([]*PrivacyFinding, error) {
+	return nil, fmt.Errorf("privacy findings not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) RemoveTrackers(ctx context.Context, browser string, trackerIDs []string) error {
+	return fmt.Errorf("tracker removal not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) QuarantineFile(ctx context.Context, source string, threats []Threat) (string, error) {
+	return "", fmt.Errorf("quarantine not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) ListQuarantine(ctx context.Context) ([]*QuarantineInfo, error) {
+	return nil, fmt.Errorf("quarantine listing not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) GetQuarantineInfo(ctx context.Context, quarantineID string) (*QuarantineInfo, error) {
+	return nil, fmt.Errorf("quarantine info not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) RestoreQuarantined(ctx context.Context, quarantineID string, destination string) error {
+	return fmt.Errorf("quarantine restore not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) DeleteQuarantined(ctx context.Context, quarantineID string) error {
+	return fmt.Errorf("quarantine delete not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) CleanQuarantine(ctx context.Context, olderThan time.Duration) (int, error) {
+	return 0, fmt.Errorf("quarantine cleanup not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) UpdateRules(ctx context.Context) error {
+	return fmt.Errorf("rule updates not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) ListRuleRepositories() ([]*RuleRepository, error) {
+	return nil, fmt.Errorf("rule repository listing not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) AddRuleRepository(ctx context.Context, url, branch string) error {
+	return fmt.Errorf("adding rule repositories not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) RemoveRuleRepository(url string) error {
+	return fmt.Errorf("removing rule repositories not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) GetRuleInfo() (*RuleInfo, error) {
+	return nil, fmt.Errorf("rule info not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) ApplyProfile(profileName string) error {
+	return fmt.Errorf("profiles not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) ListProfiles() ([]*Profile, error) {
+	return nil, fmt.Errorf("profiles not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) GetProfile(name string) (*Profile, error) {
+	return nil, fmt.Errorf("profiles not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) CreateCustomProfile(profile *Profile) error {
+	return fmt.Errorf("custom profiles not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) DeleteCustomProfile(name string) error {
+	return fmt.Errorf("deleting profiles not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) IdentifyFileType(ctx context.Context, path string) (*FileTypeResult, error) {
+	return nil, fmt.Errorf("file type identification not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) VerifyExtension(ctx context.Context, path string) (bool, error) {
+	return false, fmt.Errorf("extension verification not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) DetectSpoofing(ctx context.Context, path string, recursive bool) ([]*FileTypeResult, error) {
+	return nil, fmt.Errorf("spoofing detection not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) CheckHash(ctx context.Context, hash string) (*HashEntry, error) {
+	return nil, fmt.Errorf("hash checking not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) StoreResult(ctx context.Context, result *ScanResult) error {
+	return fmt.Errorf("result storage not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) GetScanHistory(ctx context.Context, filters HistoryFilter) ([]*HashEntry, error) {
+	return nil, fmt.Errorf("scan history not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) SearchHistory(ctx context.Context, query string) ([]*HashEntry, error) {
+	return nil, fmt.Errorf("history search not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) PruneHashStore(ctx context.Context, olderThan time.Duration) (int, error) {
+	return 0, fmt.Errorf("hash store pruning not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) GetConnectionStatus() ConnectionStatus {
+	return ConnectionStatus{
+		Mode:            "cli",
+		DaemonConnected: false,
+		SocketPath:      "",
+		TCPAddress:      "",
+		LastError:       "",
+		LastChecked:     time.Now(),
+		Uptime:          "",
+	}
+}
+

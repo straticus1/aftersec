@@ -28,11 +28,13 @@ type Client struct {
 
 // ScanResult represents unified scan results from DarkScan
 type ScanResult struct {
-	FilePath    string
-	Infected    bool
-	Threats     []Threat
-	EngineCount int
-	Error       error
+	FilePath     string
+	Infected     bool
+	Threats      []Threat
+	EngineCount  int
+	EnginesUsed  []string
+	ScanDuration time.Duration
+	Error        error
 }
 
 // Threat represents a detected threat
@@ -279,6 +281,199 @@ func (c *Client) mergeResults(existing *ScanResult, dsResult *dsscanner.ScanResu
 // UpdateEngines updates all virus definitions and rules
 func (c *Client) UpdateEngines(ctx context.Context) error {
 	return c.scanner.UpdateEngines(ctx)
+}
+
+//
+// Privacy Operations - Stubs for Phase 3
+//
+
+func (c *Client) ScanBrowserPrivacy(ctx context.Context, browsers []string) ([]*PrivacyScanResult, error) {
+	return nil, fmt.Errorf("privacy scanning not yet implemented for library mode")
+}
+
+func (c *Client) ScanApplicationTelemetry(ctx context.Context, appPath string) (*PrivacyScanResult, error) {
+	return nil, fmt.Errorf("telemetry scanning not yet implemented for library mode")
+}
+
+func (c *Client) ListPrivacyFindings(ctx context.Context, filters PrivacyFilter) ([]*PrivacyFinding, error) {
+	return nil, fmt.Errorf("privacy findings not yet implemented for library mode")
+}
+
+func (c *Client) RemoveTrackers(ctx context.Context, browser string, trackerIDs []string) error {
+	return fmt.Errorf("tracker removal not yet implemented for library mode")
+}
+
+//
+// Quarantine Operations - Stubs for Phase 4
+//
+
+func (c *Client) QuarantineFile(ctx context.Context, source string, threats []Threat) (string, error) {
+	return "", fmt.Errorf("quarantine not yet implemented for library mode")
+}
+
+func (c *Client) ListQuarantine(ctx context.Context) ([]*QuarantineInfo, error) {
+	return nil, fmt.Errorf("quarantine listing not yet implemented for library mode")
+}
+
+func (c *Client) GetQuarantineInfo(ctx context.Context, quarantineID string) (*QuarantineInfo, error) {
+	return nil, fmt.Errorf("quarantine info not yet implemented for library mode")
+}
+
+func (c *Client) RestoreQuarantined(ctx context.Context, quarantineID string, destination string) error {
+	return fmt.Errorf("quarantine restore not yet implemented for library mode")
+}
+
+func (c *Client) DeleteQuarantined(ctx context.Context, quarantineID string) error {
+	return fmt.Errorf("quarantine delete not yet implemented for library mode")
+}
+
+func (c *Client) CleanQuarantine(ctx context.Context, olderThan time.Duration) (int, error) {
+	return 0, fmt.Errorf("quarantine cleanup not yet implemented for library mode")
+}
+
+//
+// Rule Management Operations - Stubs for Phase 3
+//
+
+func (c *Client) UpdateRules(ctx context.Context) error {
+	return fmt.Errorf("rule updates not yet implemented for library mode")
+}
+
+func (c *Client) ListRuleRepositories() ([]*RuleRepository, error) {
+	return nil, fmt.Errorf("rule repository listing not yet implemented for library mode")
+}
+
+func (c *Client) AddRuleRepository(ctx context.Context, url, branch string) error {
+	return fmt.Errorf("adding rule repositories not yet implemented for library mode")
+}
+
+func (c *Client) RemoveRuleRepository(url string) error {
+	return fmt.Errorf("removing rule repositories not yet implemented for library mode")
+}
+
+func (c *Client) GetRuleInfo() (*RuleInfo, error) {
+	return nil, fmt.Errorf("rule info not yet implemented for library mode")
+}
+
+//
+// Profile Operations - Stubs for Phase 2
+//
+
+func (c *Client) ApplyProfile(profileName string) error {
+	return fmt.Errorf("profiles not yet implemented for library mode")
+}
+
+func (c *Client) ListProfiles() ([]*Profile, error) {
+	return nil, fmt.Errorf("profiles not yet implemented for library mode")
+}
+
+func (c *Client) GetProfile(name string) (*Profile, error) {
+	return nil, fmt.Errorf("profiles not yet implemented for library mode")
+}
+
+func (c *Client) CreateCustomProfile(profile *Profile) error {
+	return fmt.Errorf("custom profiles not yet implemented for library mode")
+}
+
+func (c *Client) DeleteCustomProfile(name string) error {
+	return fmt.Errorf("deleting profiles not yet implemented for library mode")
+}
+
+//
+// File Type Operations - Stubs for Phase 2
+//
+
+func (c *Client) IdentifyFileType(ctx context.Context, path string) (*FileTypeResult, error) {
+	return nil, fmt.Errorf("file type identification not yet implemented for library mode")
+}
+
+func (c *Client) VerifyExtension(ctx context.Context, path string) (bool, error) {
+	return false, fmt.Errorf("extension verification not yet implemented for library mode")
+}
+
+func (c *Client) DetectSpoofing(ctx context.Context, path string, recursive bool) ([]*FileTypeResult, error) {
+	return nil, fmt.Errorf("spoofing detection not yet implemented for library mode")
+}
+
+//
+// Hash Store Operations - Stubs for Phase 2
+//
+
+func (c *Client) CheckHash(ctx context.Context, hash string) (*HashEntry, error) {
+	return nil, fmt.Errorf("hash checking not yet implemented for library mode")
+}
+
+func (c *Client) StoreResult(ctx context.Context, result *ScanResult) error {
+	return fmt.Errorf("result storage not yet implemented for library mode")
+}
+
+func (c *Client) GetScanHistory(ctx context.Context, filters HistoryFilter) ([]*HashEntry, error) {
+	return nil, fmt.Errorf("scan history not yet implemented for library mode")
+}
+
+func (c *Client) SearchHistory(ctx context.Context, query string) ([]*HashEntry, error) {
+	return nil, fmt.Errorf("history search not yet implemented for library mode")
+}
+
+func (c *Client) PruneHashStore(ctx context.Context, olderThan time.Duration) (int, error) {
+	return 0, fmt.Errorf("hash store pruning not yet implemented for library mode")
+}
+
+//
+// Engine Management Operations
+//
+
+func (c *Client) GetEnabledEngines() []string {
+	// Return list of enabled engine names
+	var engines []string
+
+	if c.config.Engines.ClamAV.Enabled {
+		engines = append(engines, "ClamAV")
+	}
+	if c.config.Engines.YARA.Enabled {
+		engines = append(engines, "YARA")
+	}
+	if c.config.Engines.CAPA.Enabled {
+		engines = append(engines, "CAPA")
+	}
+	if c.config.Engines.Viper.Enabled {
+		engines = append(engines, "Viper")
+	}
+	if c.config.Engines.Document.Enabled {
+		engines = append(engines, "Document")
+	}
+	if c.config.Engines.Heuristics.Enabled {
+		engines = append(engines, "Heuristics")
+	}
+	if c.config.Engines.VirusTotal.Enabled {
+		engines = append(engines, "VirusTotal")
+	}
+
+	return engines
+}
+
+func (c *Client) GetEngineCount() int {
+	return len(c.GetEnabledEngines())
+}
+
+func (c *Client) IsEnabled() bool {
+	return c.config.Enabled
+}
+
+//
+// Connection Management
+//
+
+func (c *Client) GetConnectionStatus() ConnectionStatus {
+	return ConnectionStatus{
+		Mode:            "library",
+		DaemonConnected: false,
+		SocketPath:      "",
+		TCPAddress:      "",
+		LastError:       "",
+		LastChecked:     time.Now(),
+		Uptime:          "",
+	}
 }
 
 // Close releases all engine resources

@@ -22,24 +22,24 @@ type IntegrationReport struct {
 type ThreatLevel int
 
 const (
-	ThreatNone ThreatLevel = iota
-	ThreatLow
-	ThreatMedium
-	ThreatHigh
-	ThreatCritical
+	ThreatLevelNone ThreatLevel = iota
+	ThreatLevelLow
+	ThreatLevelMedium
+	ThreatLevelHigh
+	ThreatLevelCritical
 )
 
 func (t ThreatLevel) String() string {
 	switch t {
-	case ThreatNone:
+	case ThreatLevelNone:
 		return "NONE"
-	case ThreatLow:
+	case ThreatLevelLow:
 		return "LOW"
-	case ThreatMedium:
+	case ThreatLevelMedium:
 		return "MEDIUM"
-	case ThreatHigh:
+	case ThreatLevelHigh:
 		return "HIGH"
-	case ThreatCritical:
+	case ThreatLevelCritical:
 		return "CRITICAL"
 	default:
 		return "UNKNOWN"
@@ -77,14 +77,14 @@ func (c *Client) RealTimeScan(ctx context.Context, path string, timeoutSeconds i
 	result, err := c.ScanFile(scanCtx, path)
 	if err != nil {
 		if err == context.DeadlineExceeded {
-			return false, ThreatNone, fmt.Errorf("scan timeout after %d seconds", timeoutSeconds)
+			return false, ThreatLevelNone, fmt.Errorf("scan timeout after %d seconds", timeoutSeconds)
 		}
-		return false, ThreatNone, err
+		return false, ThreatLevelNone, err
 	}
 
 	threatLevel := c.calculateThreatLevel(result)
 
-	shouldBlock := result.Infected && threatLevel >= ThreatHigh
+	shouldBlock := result.Infected && threatLevel >= ThreatLevelHigh
 
 	return shouldBlock, threatLevel, nil
 }
@@ -92,10 +92,10 @@ func (c *Client) RealTimeScan(ctx context.Context, path string, timeoutSeconds i
 // calculateThreatLevel determines overall threat level from scan results
 func (c *Client) calculateThreatLevel(result *ScanResult) ThreatLevel {
 	if !result.Infected || len(result.Threats) == 0 {
-		return ThreatNone
+		return ThreatLevelNone
 	}
 
-	maxLevel := ThreatLow
+	maxLevel := ThreatLevelLow
 
 	for _, threat := range result.Threats {
 		level := parseThreatSeverity(threat.Severity)
@@ -105,7 +105,7 @@ func (c *Client) calculateThreatLevel(result *ScanResult) ThreatLevel {
 	}
 
 	// Multiple engines detecting the same threat increases confidence
-	if result.EngineCount >= 2 && len(result.Threats) > 0 && maxLevel < ThreatCritical {
+	if result.EngineCount >= 2 && len(result.Threats) > 0 && maxLevel < ThreatLevelCritical {
 		maxLevel++
 	}
 
@@ -116,13 +116,13 @@ func (c *Client) calculateThreatLevel(result *ScanResult) ThreatLevel {
 func parseThreatSeverity(severity string) ThreatLevel {
 	switch severity {
 	case "critical", "CRITICAL", "high", "HIGH":
-		return ThreatHigh
+		return ThreatLevelHigh
 	case "medium", "MEDIUM", "moderate", "MODERATE":
-		return ThreatMedium
+		return ThreatLevelMedium
 	case "low", "LOW", "info", "INFO":
-		return ThreatLow
+		return ThreatLevelLow
 	default:
-		return ThreatMedium
+		return ThreatLevelMedium
 	}
 }
 
@@ -146,30 +146,41 @@ func (c *Client) getEnabledEngines() []string {
 	return engines
 }
 
-// GetEnabledEngines returns a list of enabled engine names (public)
-func (c *Client) GetEnabledEngines() []string {
-	return c.getEnabledEngines()
+// Note: GetEnabledEngines(), IsEnabled(), and GetEngineCount() are now implemented in client.go
+
+// CalculateThreatLevel is a public helper for calculating threat level from scan results
+func CalculateThreatLevel(result *ScanResult) ThreatLevel {
+	if !result.Infected || len(result.Threats) == 0 {
+		return ThreatLevelNone
+	}
+
+	maxLevel := ThreatLevelLow
+
+	for _, threat := range result.Threats {
+		level := parseThreatSeverity(threat.Severity)
+		if level > maxLevel {
+			maxLevel = level
+		}
+	}
+
+	// Multiple engines detecting the same threat increases confidence
+	if result.EngineCount >= 2 && len(result.Threats) > 0 && maxLevel < ThreatLevelCritical {
+		maxLevel++
+	}
+
+	return maxLevel
 }
 
-// IsEnabled returns whether DarkScan integration is enabled
-func (c *Client) IsEnabled() bool {
-	return c.config.Enabled
-}
-
-// GetEngineCount returns the number of enabled engines
-func (c *Client) GetEngineCount() int {
-	return len(c.getEnabledEngines())
-}
-
-// FormatThreatSummary creates a human-readable summary of threats
-func FormatThreatSummary(report *IntegrationReport) string {
-	if !report.Infected {
+// FormatThreatSummary creates a human-readable summary of threats from ScanResult
+func FormatThreatSummary(result *ScanResult) string {
+	if !result.Infected || len(result.Threats) == 0 {
 		return "No threats detected"
 	}
 
-	summary := fmt.Sprintf("Detected %d threat(s) [%s]:\n", len(report.Threats), report.ThreatLevel)
+	threatLevel := CalculateThreatLevel(result)
+	summary := fmt.Sprintf("Detected %d threat(s) [%s]:\n", len(result.Threats), threatLevel)
 
-	for _, threat := range report.Threats {
+	for _, threat := range result.Threats {
 		summary += fmt.Sprintf("  - [%s] %s: %s\n", threat.Engine, threat.Name, threat.Description)
 	}
 
