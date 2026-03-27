@@ -5,17 +5,19 @@ import (
 	"net/http"
 
 	"aftersec/pkg/server/auth"
+	"aftersec/pkg/server/clamav"
 	"aftersec/pkg/server/repository"
 )
 
 // Router encapsulates the HTTP routing logic for the management UI
 type Router struct {
-	mux *http.ServeMux
-	repos *repository.Repositories
+	mux           *http.ServeMux
+	repos         *repository.Repositories
+	clamavHandler *ClamAVHandler
 }
 
 // NewRouter initializes a fresh API layout
-func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories) *Router {
+func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, clamavStorage *clamav.Storage, clamavUpdater *clamav.Updater) *Router {
 	mux := http.NewServeMux()
 
 	// Public Health Endpoint
@@ -24,7 +26,17 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories) *Rou
 		json.NewEncoder(w).Encode(map[string]string{"status": "operational", "version": "1.0.0"})
 	})
 
-	router := &Router{mux: mux, repos: repos}
+	// Initialize ClamAV handler if storage and updater are provided
+	var clamavHandler *ClamAVHandler
+	if clamavStorage != nil && clamavUpdater != nil {
+		clamavHandler = NewClamAVHandler(clamavStorage, clamavUpdater)
+	}
+
+	router := &Router{
+		mux:           mux,
+		repos:         repos,
+		clamavHandler: clamavHandler,
+	}
 
 	// Organizations API
 	mux.HandleFunc("/api/v1/organizations", jwtManager.HTTPMiddleware(router.handleOrganizations))
@@ -74,6 +86,16 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories) *Rou
 
 	// Detonation Engine API
 	mux.HandleFunc("/api/v1/detonate", jwtManager.HTTPMiddleware(router.handleDetonate))
+
+	// ClamAV Definition Distribution API (public endpoints for endpoints to download definitions)
+	if clamavHandler != nil {
+		mux.HandleFunc("/api/v1/clamav/definitions/version", clamavHandler.HandleGetVersion)
+		mux.HandleFunc("/api/v1/clamav/definitions/latest", clamavHandler.HandleGetLatestBundle)
+		mux.HandleFunc("/api/v1/clamav/definitions/list", clamavHandler.HandleListDefinitions)
+		mux.HandleFunc("/api/v1/clamav/definitions/", clamavHandler.HandleGetDefinitionFile)
+		// Admin endpoint for forcing updates (requires authentication)
+		mux.HandleFunc("/api/v1/clamav/update", jwtManager.HTTPMiddleware(clamavHandler.HandleForceUpdate))
+	}
 
 	return router
 }

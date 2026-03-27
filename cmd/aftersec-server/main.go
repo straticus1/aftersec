@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	grpcapi "aftersec/pkg/api/grpc"
 	"aftersec/pkg/server/api/rest"
 	"aftersec/pkg/server/auth"
+	"aftersec/pkg/server/clamav"
 	"aftersec/pkg/server/database"
 	grpcserver "aftersec/pkg/server/grpc"
 	"aftersec/pkg/server/repository"
@@ -40,8 +42,38 @@ func main() {
 	// 1.5 Setup Auth
 	jwtManager := auth.NewJWTManager("super-secret-key-12345", 24*time.Hour)
 
+	// 1.6 Initialize ClamAV Definition Updater (optional)
+	var clamavStorage *clamav.Storage
+	var clamavUpdater *clamav.Updater
+
+	clamavEnabled := os.Getenv("CLAMAV_UPDATER_ENABLED")
+	if clamavEnabled == "true" {
+		storagePath := os.Getenv("CLAMAV_STORAGE_PATH")
+		if storagePath == "" {
+			storagePath = "/var/aftersec/clamav-defs"
+		}
+
+		clamavStorage = clamav.NewStorage(storagePath)
+
+		var err error
+		clamavUpdater, err = clamav.NewUpdater(storagePath, 4*time.Hour)
+		if err != nil {
+			log.Printf("Warning: ClamAV updater initialization failed: %v", err)
+		} else {
+			log.Println("ClamAV definition updater initialized")
+			// Start updater in background
+			go func() {
+				if err := clamavUpdater.Start(context.Background()); err != nil {
+					log.Printf("ClamAV updater stopped: %v", err)
+				}
+			}()
+		}
+	} else {
+		log.Println("ClamAV definition updater disabled (set CLAMAV_UPDATER_ENABLED=true to enable)")
+	}
+
 	// 2. Start basic REST API
-	mux := rest.NewRouter(jwtManager, repos)
+	mux := rest.NewRouter(jwtManager, repos, clamavStorage, clamavUpdater)
 
 	go func() {
 		log.Println("Listening for REST API on :8080")

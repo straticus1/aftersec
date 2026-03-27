@@ -21,6 +21,7 @@ type ClamAVConfig struct {
 	Enabled      bool   `yaml:"enabled" json:"enabled"`
 	DatabasePath string `yaml:"database_path" json:"database_path"`
 	AutoUpdate   bool   `yaml:"auto_update" json:"auto_update"`
+	MirrorURL    string `yaml:"mirror_url" json:"mirror_url"` // Custom mirror server for definition updates
 }
 
 // YARAConfig configures the YARA engine
