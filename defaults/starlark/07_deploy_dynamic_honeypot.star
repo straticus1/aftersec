@@ -1,5 +1,12 @@
-# Demo: Drop an AI Genkit-generated honeypot
-def on_startup(ctx):
-    # Deploys an irresistible decoy credential file using AI
-    deploy_honeypot("aws_credentials", "/tmp/.aws/credentials")
-    emit_alert("Dynamic Honeypot deployed to /tmp/.aws", severity="info")
+# AI-Generated Honeypot Deployment
+# Deploy a decoy credential file to detect intrusions
+result = deploy_honeypot("aws_credentials", "/tmp/.aftersec_honeypot")
+report_finding(
+    category="Deception",
+    name="Honeypot Deployed",
+    desc="AI-generated honeypot credential deployed to /tmp/.aftersec_honeypot",
+    severity="info",
+    current_val="deployed",
+    expected_val="deployed",
+    passed=True
+)

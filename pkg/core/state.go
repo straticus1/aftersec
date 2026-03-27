@@ -10,6 +10,7 @@ const (
 	Med      Severity = "med"
 	High     Severity = "high"
 	VeryHigh Severity = "very-high"
+	Critical Severity = "critical"
 )
 
 type Finding struct {

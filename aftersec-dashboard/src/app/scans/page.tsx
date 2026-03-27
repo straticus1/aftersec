@@ -58,7 +58,7 @@ export default async function ScansPage() {
                       )}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <button className="text-slate-500 hover:text-fuchsia-400 transition-colors font-medium">Report</button>
+                      <Link href={`/scans/${scan.id}`} className="text-slate-500 hover:text-fuchsia-400 transition-colors font-medium">View Details</Link>
                     </td>
                   </tr>
                 ))}
