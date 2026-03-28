@@ -21,9 +21,12 @@ type cacheEntry struct {
 
 // Client wraps the DarkScan scanner with AfterSec-specific integration
 type Client struct {
-	scanner *dsscanner.Scanner
-	config  *Config
-	cache   sync.Map
+	scanner          *dsscanner.Scanner
+	config           *Config
+	cache            sync.Map
+	hashStore        *HashStore
+	fileTypeDetector *FileTypeDetector
+	profileManager   *ProfileManager
 }
 
 // ScanResult represents unified scan results from DarkScan
@@ -60,6 +63,33 @@ func NewClient(cfg *Config) (*Client, error) {
 	// Initialize and register enabled engines
 	if err := client.initializeEngines(); err != nil {
 		return nil, fmt.Errorf("failed to initialize DarkScan engines: %w", err)
+	}
+
+	// Initialize hash store
+	if cfg.HashStore.Enabled {
+		hashStore, err := NewHashStore(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize hash store: %w", err)
+		}
+		client.hashStore = hashStore
+	}
+
+	// Initialize file type detector
+	if cfg.FileType.Enabled {
+		fileTypeDetector, err := NewFileTypeDetector(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize file type detector: %w", err)
+		}
+		client.fileTypeDetector = fileTypeDetector
+	}
+
+	// Initialize profile manager
+	if cfg.Profiles.Enabled {
+		profileManager, err := NewProfileManager(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize profile manager: %w", err)
+		}
+		client.profileManager = profileManager
 	}
 
 	return client, nil
@@ -131,6 +161,40 @@ func (c *Client) initializeEngines() error {
 
 // ScanFile scans a single file with all enabled engines
 func (c *Client) ScanFile(ctx context.Context, path string) (*ScanResult, error) {
+	// File type validation (if enabled)
+	if c.fileTypeDetector != nil && c.config.FileType.DetectSpoofing {
+		if err := c.fileTypeDetector.ValidateBeforeScan(ctx, path, true); err != nil {
+			return &ScanResult{
+				FilePath: path,
+				Error:    err,
+			}, err
+		}
+	}
+
+	// Hash store deduplication check (if enabled)
+	if c.hashStore != nil && c.config.HashStore.DeduplicateScans {
+		hash, err := CalculateFileHash(path)
+		if err == nil {
+			if entry, err := c.hashStore.CheckHash(ctx, hash); err == nil && entry != nil {
+				// Check if entry is recent enough to skip rescan
+				retentionDays := c.config.HashStore.RetentionDays
+				if retentionDays == 0 {
+					retentionDays = 90
+				}
+				if time.Since(entry.LastSeen) < time.Duration(retentionDays)*24*time.Hour {
+					// Return cached result from hash store
+					return &ScanResult{
+						FilePath:    path,
+						Infected:    entry.Infected,
+						Threats:     entry.Threats,
+						EngineCount: len(c.getEnabledEngines()),
+					}, nil
+				}
+			}
+		}
+	}
+
+	// Memory cache check (backward compatibility)
 	if c.config.CacheEnabled {
 		if info, err := os.Stat(path); err == nil {
 			cacheKey := path + "_" + info.ModTime().String()
@@ -148,6 +212,7 @@ func (c *Client) ScanFile(ctx context.Context, path string) (*ScanResult, error)
 		}
 	}
 
+	// Perform actual scan
 	results, err := c.scanner.ScanFile(ctx, path)
 	if err != nil {
 		return &ScanResult{
@@ -158,6 +223,15 @@ func (c *Client) ScanFile(ctx context.Context, path string) (*ScanResult, error)
 
 	aggregated := c.aggregateResults(path, results)
 
+	// Store in hash store
+	if c.hashStore != nil {
+		if err := c.hashStore.StoreResult(ctx, aggregated); err != nil {
+			// Log error but don't fail the scan
+			fmt.Fprintf(os.Stderr, "Warning: failed to store scan result in hash store: %v\n", err)
+		}
+	}
+
+	// Memory cache (backward compatibility)
 	if c.config.CacheEnabled {
 		if info, err := os.Stat(path); err == nil {
 			cacheKey := path + "_" + info.ModTime().String()
@@ -356,67 +430,113 @@ func (c *Client) GetRuleInfo() (*RuleInfo, error) {
 }
 
 //
-// Profile Operations - Stubs for Phase 2
+// Profile Operations
 //
 
 func (c *Client) ApplyProfile(profileName string) error {
-	return fmt.Errorf("profiles not yet implemented for library mode")
+	if c.profileManager == nil {
+		return fmt.Errorf("profile manager not enabled")
+	}
+	profile, err := c.profileManager.ApplyProfile(profileName)
+	if err != nil {
+		return err
+	}
+	// Apply profile settings to config
+	ApplyProfileToConfig(c.config, profile)
+	// Reinitialize engines with new configuration
+	return c.initializeEngines()
 }
 
 func (c *Client) ListProfiles() ([]*Profile, error) {
-	return nil, fmt.Errorf("profiles not yet implemented for library mode")
+	if c.profileManager == nil {
+		return nil, fmt.Errorf("profile manager not enabled")
+	}
+	return c.profileManager.ListProfiles()
 }
 
 func (c *Client) GetProfile(name string) (*Profile, error) {
-	return nil, fmt.Errorf("profiles not yet implemented for library mode")
+	if c.profileManager == nil {
+		return nil, fmt.Errorf("profile manager not enabled")
+	}
+	return c.profileManager.GetProfile(name)
 }
 
 func (c *Client) CreateCustomProfile(profile *Profile) error {
-	return fmt.Errorf("custom profiles not yet implemented for library mode")
+	if c.profileManager == nil {
+		return fmt.Errorf("profile manager not enabled")
+	}
+	return c.profileManager.CreateCustomProfile(profile)
 }
 
 func (c *Client) DeleteCustomProfile(name string) error {
-	return fmt.Errorf("deleting profiles not yet implemented for library mode")
+	if c.profileManager == nil {
+		return fmt.Errorf("profile manager not enabled")
+	}
+	return c.profileManager.DeleteCustomProfile(name)
 }
 
 //
-// File Type Operations - Stubs for Phase 2
+// File Type Operations
 //
 
 func (c *Client) IdentifyFileType(ctx context.Context, path string) (*FileTypeResult, error) {
-	return nil, fmt.Errorf("file type identification not yet implemented for library mode")
+	if c.fileTypeDetector == nil {
+		return nil, fmt.Errorf("file type detector not enabled")
+	}
+	return c.fileTypeDetector.IdentifyFileType(ctx, path)
 }
 
 func (c *Client) VerifyExtension(ctx context.Context, path string) (bool, error) {
-	return false, fmt.Errorf("extension verification not yet implemented for library mode")
+	if c.fileTypeDetector == nil {
+		return false, fmt.Errorf("file type detector not enabled")
+	}
+	return c.fileTypeDetector.VerifyExtension(ctx, path)
 }
 
 func (c *Client) DetectSpoofing(ctx context.Context, path string, recursive bool) ([]*FileTypeResult, error) {
-	return nil, fmt.Errorf("spoofing detection not yet implemented for library mode")
+	if c.fileTypeDetector == nil {
+		return nil, fmt.Errorf("file type detector not enabled")
+	}
+	return c.fileTypeDetector.DetectSpoofing(ctx, path, recursive)
 }
 
 //
-// Hash Store Operations - Stubs for Phase 2
+// Hash Store Operations
 //
 
 func (c *Client) CheckHash(ctx context.Context, hash string) (*HashEntry, error) {
-	return nil, fmt.Errorf("hash checking not yet implemented for library mode")
+	if c.hashStore == nil {
+		return nil, fmt.Errorf("hash store not enabled")
+	}
+	return c.hashStore.CheckHash(ctx, hash)
 }
 
 func (c *Client) StoreResult(ctx context.Context, result *ScanResult) error {
-	return fmt.Errorf("result storage not yet implemented for library mode")
+	if c.hashStore == nil {
+		return fmt.Errorf("hash store not enabled")
+	}
+	return c.hashStore.StoreResult(ctx, result)
 }
 
 func (c *Client) GetScanHistory(ctx context.Context, filters HistoryFilter) ([]*HashEntry, error) {
-	return nil, fmt.Errorf("scan history not yet implemented for library mode")
+	if c.hashStore == nil {
+		return nil, fmt.Errorf("hash store not enabled")
+	}
+	return c.hashStore.GetScanHistory(ctx, filters)
 }
 
 func (c *Client) SearchHistory(ctx context.Context, query string) ([]*HashEntry, error) {
-	return nil, fmt.Errorf("history search not yet implemented for library mode")
+	if c.hashStore == nil {
+		return nil, fmt.Errorf("hash store not enabled")
+	}
+	return c.hashStore.SearchHistory(ctx, query)
 }
 
 func (c *Client) PruneHashStore(ctx context.Context, olderThan time.Duration) (int, error) {
-	return 0, fmt.Errorf("hash store pruning not yet implemented for library mode")
+	if c.hashStore == nil {
+		return 0, fmt.Errorf("hash store not enabled")
+	}
+	return c.hashStore.PruneHashStore(ctx, olderThan)
 }
 
 //
@@ -478,5 +598,10 @@ func (c *Client) GetConnectionStatus() ConnectionStatus {
 
 // Close releases all engine resources
 func (c *Client) Close() error {
+	if c.hashStore != nil {
+		if err := c.hashStore.Close(); err != nil {
+			return fmt.Errorf("failed to close hash store: %w", err)
+		}
+	}
 	return c.scanner.Close()
 }

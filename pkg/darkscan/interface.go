@@ -244,44 +244,8 @@ type RuleInfo struct {
 	RulesPath     string             // Where rules are stored
 }
 
-// Profile represents a scan configuration preset.
-type Profile struct {
-	Name          string                 // Profile name
-	Description   string                 // What this profile does
-	Engines       []string               // Enabled engines
-	Timeout       time.Duration          // Scan timeout
-	MaxFileSize   int64                  // Max file size to scan
-	SkipArchives  bool                   // Skip archive files
-	SkipEncrypted bool                   // Skip encrypted files
-	CustomFlags   map[string]interface{} // Engine-specific options
-}
+// Note: Profile type defined in profiles.go
 
-// FileTypeResult represents file type identification results.
-type FileTypeResult struct {
-	FilePath      string  // Path to analyzed file
-	ActualType    string  // Type from magic bytes
-	ExtensionType string  // Type from file extension
-	IsSpoofed     bool    // True if types don't match
-	MimeType      string  // MIME type
-	Confidence    float64 // Detection confidence (0.0-1.0)
-	Signatures    []string // Matched file signatures
-}
+// Note: FileTypeResult type defined in filetype.go
 
-// HashEntry represents a scan history record.
-type HashEntry struct {
-	FileHash    string    // SHA256 hash
-	FilePath    string    // Original file path
-	LastScanned time.Time // Most recent scan
-	Infected    bool      // Infection status
-	ThreatNames []string  // Detected threats
-	EnginesUsed []string  // Engines that scanned this file
-	ScanCount   int       // Times this hash was scanned
-}
-
-// HistoryFilter specifies criteria for filtering scan history.
-type HistoryFilter struct {
-	InfectedOnly bool      // Only show infected files
-	Since        time.Time // Only entries after this time
-	Limit        int       // Maximum results
-	Engine       string    // Filter by engine
-}
+// Note: HashEntry and HistoryFilter types defined in hashstore.go
