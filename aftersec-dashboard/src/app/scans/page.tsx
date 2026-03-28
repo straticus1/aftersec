@@ -1,14 +1,34 @@
-import React from 'react';
+"use client";
+
+import React, { useState, useEffect } from 'react';
 import { getScans } from '@/lib/api';
 import Link from 'next/link';
+import ScanModal from '@/components/ScanModal';
 
-export default async function ScansPage() {
-  const scans = await getScans();
+export default function ScansPage() {
+  const [scans, setScans] = useState<any[]>([]);
+  const [showScanModal, setShowScanModal] = useState(false);
+
+  useEffect(() => {
+    getScans().then(setScans);
+  }, []);
+
+  const handleScan = async (paths: string[], scanType: 'file' | 'volume', profile: string) => {
+    console.log('Starting scan:', { paths, scanType, profile });
+
+    // Here you would call the backend API to initiate the scan
+    // For now, we'll just log it
+    alert(`Scan initiated:\nType: ${scanType}\nProfile: ${profile}\nPaths: ${paths.join(', ')}`);
+
+    // Refresh scans list
+    const updatedScans = await getScans();
+    setScans(updatedScans);
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-purple-500/30 overflow-hidden relative">
       <div className="absolute top-0 -inset-x-20 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-fuchsia-900/20 via-slate-950 to-slate-950 h-[800px] -z-10 pointer-events-none"></div>
-      
+
       <main className="max-w-7xl mx-auto px-8 py-12 relative z-10">
         <header className="flex justify-between items-center mb-12 border-b border-fuchsia-900/30 pb-6">
           <div className="flex flex-col">
@@ -19,7 +39,10 @@ export default async function ScansPage() {
               Security Scans
             </h1>
           </div>
-          <button className="px-5 py-2.5 rounded-lg bg-fuchsia-600 hover:bg-fuchsia-500 text-white transition-all font-medium shadow-[0_0_20px_rgba(192,38,211,0.3)] text-sm flex items-center gap-2">
+          <button
+            onClick={() => setShowScanModal(true)}
+            className="px-5 py-2.5 rounded-lg bg-fuchsia-600 hover:bg-fuchsia-500 text-white transition-all font-medium shadow-[0_0_20px_rgba(192,38,211,0.3)] text-sm flex items-center gap-2"
+          >
             Initiate Scan
           </button>
         </header>
@@ -67,6 +90,12 @@ export default async function ScansPage() {
           </div>
         </section>
       </main>
+
+      <ScanModal
+        isOpen={showScanModal}
+        onClose={() => setShowScanModal(false)}
+        onScan={handleScan}
+      />
     </div>
   );
 }

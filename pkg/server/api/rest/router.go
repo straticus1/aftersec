@@ -120,6 +120,11 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 		// Scan operations
 		mux.HandleFunc("/api/v1/darkscan/scan", jwtManager.HTTPMiddleware(darkscanHandler.ScanFile))
 		mux.HandleFunc("/api/v1/darkscan/scan/directory", jwtManager.HTTPMiddleware(darkscanHandler.ScanDirectory))
+		mux.HandleFunc("/api/v1/darkscan/scan/volume", jwtManager.HTTPMiddleware(darkscanHandler.ScanVolume))
+		mux.HandleFunc("/api/v1/darkscan/scan/multiple", jwtManager.HTTPMiddleware(darkscanHandler.ScanMultiplePaths))
+
+		// Volume operations
+		mux.HandleFunc("/api/v1/darkscan/volumes", jwtManager.HTTPMiddleware(darkscanHandler.ListVolumes))
 
 		// Privacy operations
 		mux.HandleFunc("/api/v1/darkscan/privacy/scan", jwtManager.HTTPMiddleware(darkscanHandler.ScanPrivacy))

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -588,6 +591,161 @@ func (h *DarkScanHandler) DetectSpoofing(w http.ResponseWriter, r *http.Request)
 }
 
 //
+// Volume Operations
+//
+
+func (h *DarkScanHandler) ListVolumes(w http.ResponseWriter, r *http.Request) {
+	volumes := detectAvailableVolumes()
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"volumes": volumes,
+			"total":   len(volumes),
+		},
+	})
+}
+
+func (h *DarkScanHandler) ScanVolume(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path      string   `json:"path"`
+		Profile   string   `json:"profile"`
+		Exclude   []string `json:"exclude"`
+		Timeout   int      `json:"timeout,omitempty"` // seconds
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.Path == "" {
+		respondError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	if req.Profile == "" {
+		req.Profile = "standard"
+	}
+
+	timeout := 30 * time.Minute
+	if req.Timeout > 0 {
+		timeout = time.Duration(req.Timeout) * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	// For volume scans, we use ScanDirectory with recursive=true
+	// This is similar to the scan-volume command
+	results, err := h.client.ScanDirectory(ctx, req.Path, true)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("Volume scan failed: %v", err))
+		return
+	}
+
+	infectedCount := 0
+	totalThreats := 0
+	for _, result := range results {
+		if result.Infected {
+			infectedCount++
+			totalThreats += len(result.Threats)
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"volume_path":    req.Path,
+			"profile":        req.Profile,
+			"total_files":    len(results),
+			"infected_files": infectedCount,
+			"total_threats":  totalThreats,
+			"results":        results,
+		},
+	})
+}
+
+func (h *DarkScanHandler) ScanMultiplePaths(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paths     []string `json:"paths"`
+		Profile   string   `json:"profile"`
+		Recursive bool     `json:"recursive"`
+		Timeout   int      `json:"timeout,omitempty"` // seconds
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if len(req.Paths) == 0 {
+		respondError(w, http.StatusBadRequest, "paths array is required and must not be empty")
+		return
+	}
+
+	if req.Profile == "" {
+		req.Profile = "standard"
+	}
+
+	timeout := 30 * time.Minute
+	if req.Timeout > 0 {
+		timeout = time.Duration(req.Timeout) * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	// Scan each path
+	allResults := make(map[string]interface{})
+	totalFiles := 0
+	totalInfected := 0
+	totalThreats := 0
+
+	for _, path := range req.Paths {
+		results, err := h.client.ScanDirectory(ctx, path, req.Recursive)
+		if err != nil {
+			allResults[path] = map[string]interface{}{
+				"error": err.Error(),
+			}
+			continue
+		}
+
+		infectedCount := 0
+		threatCount := 0
+		for _, result := range results {
+			if result.Infected {
+				infectedCount++
+				threatCount += len(result.Threats)
+			}
+		}
+
+		totalFiles += len(results)
+		totalInfected += infectedCount
+		totalThreats += threatCount
+
+		allResults[path] = map[string]interface{}{
+			"total_files":    len(results),
+			"infected_files": infectedCount,
+			"total_threats":  threatCount,
+			"results":        results,
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"paths":          req.Paths,
+			"profile":        req.Profile,
+			"total_files":    totalFiles,
+			"infected_files": totalInfected,
+			"total_threats":  totalThreats,
+			"results":        allResults,
+		},
+	})
+}
+
+//
 // Status Operations
 //
 
@@ -663,4 +821,101 @@ func parseBoolQuery(value string) *bool {
 	}
 	b := value == "true" || value == "1"
 	return &b
+}
+
+// Volume detection helper
+type VolumeInfo struct {
+	Path       string `json:"path"`
+	Size       uint64 `json:"size,omitempty"`
+	Available  uint64 `json:"available,omitempty"`
+	Filesystem string `json:"filesystem,omitempty"`
+	MountPoint string `json:"mount_point"`
+}
+
+func detectAvailableVolumes() []VolumeInfo {
+	var volumes []VolumeInfo
+
+	switch runtime.GOOS {
+	case "darwin":
+		// Root volume
+		volumes = append(volumes, VolumeInfo{
+			Path:       "/",
+			MountPoint: "/",
+			Filesystem: "apfs",
+		})
+
+		// Check /Volumes for mounted drives
+		volumesDir := "/Volumes"
+		if entries, err := os.ReadDir(volumesDir); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					volPath := filepath.Join(volumesDir, entry.Name())
+					volumes = append(volumes, VolumeInfo{
+						Path:       volPath,
+						MountPoint: volPath,
+					})
+				}
+			}
+		}
+
+		// Add System Data volume
+		if info, err := os.Stat("/System/Volumes/Data"); err == nil && info.IsDir() {
+			volumes = append(volumes, VolumeInfo{
+				Path:       "/System/Volumes/Data",
+				MountPoint: "/System/Volumes/Data",
+				Filesystem: "apfs",
+			})
+		}
+
+	case "linux":
+		// Root
+		volumes = append(volumes, VolumeInfo{
+			Path:       "/",
+			MountPoint: "/",
+		})
+
+		// Common mount points
+		commonMounts := []string{"/home", "/mnt", "/media"}
+		for _, mount := range commonMounts {
+			if info, err := os.Stat(mount); err == nil && info.IsDir() {
+				volumes = append(volumes, VolumeInfo{
+					Path:       mount,
+					MountPoint: mount,
+				})
+			}
+		}
+
+		// Check /media subdirectories
+		if entries, err := os.ReadDir("/media"); err == nil {
+			for _, userDir := range entries {
+				userPath := filepath.Join("/media", userDir.Name())
+				if subEntries, err := os.ReadDir(userPath); err == nil {
+					for _, entry := range subEntries {
+						if entry.IsDir() {
+							volPath := filepath.Join(userPath, entry.Name())
+							volumes = append(volumes, VolumeInfo{
+								Path:       volPath,
+								MountPoint: volPath,
+							})
+						}
+					}
+				}
+			}
+		}
+
+	case "windows":
+		// Check drive letters
+		for drive := 'A'; drive <= 'Z'; drive++ {
+			drivePath := fmt.Sprintf("%c:\\", drive)
+			if info, err := os.Stat(drivePath); err == nil && info.IsDir() {
+				volumes = append(volumes, VolumeInfo{
+					Path:       drivePath,
+					MountPoint: drivePath,
+					Filesystem: "ntfs",
+				})
+			}
+		}
+	}
+
+	return volumes
 }
