@@ -27,6 +27,8 @@ type Client struct {
 	hashStore        *HashStore
 	fileTypeDetector *FileTypeDetector
 	profileManager   *ProfileManager
+	privacyScanner   *PrivacyScanner
+	ruleManager      *RuleManager
 }
 
 // ScanResult represents unified scan results from DarkScan
@@ -90,6 +92,24 @@ func NewClient(cfg *Config) (*Client, error) {
 			return nil, fmt.Errorf("failed to initialize profile manager: %w", err)
 		}
 		client.profileManager = profileManager
+	}
+
+	// Initialize privacy scanner
+	if cfg.Privacy.Enabled {
+		privacyScanner, err := NewPrivacyScanner(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize privacy scanner: %w", err)
+		}
+		client.privacyScanner = privacyScanner
+	}
+
+	// Initialize rule manager
+	if cfg.RuleManager.Enabled {
+		ruleManager, err := NewRuleManager(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize rule manager: %w", err)
+		}
+		client.ruleManager = ruleManager
 	}
 
 	return client, nil
@@ -358,23 +378,35 @@ func (c *Client) UpdateEngines(ctx context.Context) error {
 }
 
 //
-// Privacy Operations - Stubs for Phase 3
+// Privacy Operations
 //
 
 func (c *Client) ScanBrowserPrivacy(ctx context.Context, browsers []string) ([]*PrivacyScanResult, error) {
-	return nil, fmt.Errorf("privacy scanning not yet implemented for library mode")
+	if c.privacyScanner == nil {
+		return nil, fmt.Errorf("privacy scanner not enabled")
+	}
+	return c.privacyScanner.ScanBrowserPrivacy(ctx, browsers)
 }
 
 func (c *Client) ScanApplicationTelemetry(ctx context.Context, appPath string) (*PrivacyScanResult, error) {
-	return nil, fmt.Errorf("telemetry scanning not yet implemented for library mode")
+	if c.privacyScanner == nil {
+		return nil, fmt.Errorf("privacy scanner not enabled")
+	}
+	return c.privacyScanner.ScanApplicationTelemetry(ctx, appPath)
 }
 
 func (c *Client) ListPrivacyFindings(ctx context.Context, filters PrivacyFilter) ([]*PrivacyFinding, error) {
-	return nil, fmt.Errorf("privacy findings not yet implemented for library mode")
+	if c.privacyScanner == nil {
+		return nil, fmt.Errorf("privacy scanner not enabled")
+	}
+	return c.privacyScanner.ListPrivacyFindings(ctx, filters)
 }
 
 func (c *Client) RemoveTrackers(ctx context.Context, browser string, trackerIDs []string) error {
-	return fmt.Errorf("tracker removal not yet implemented for library mode")
+	if c.privacyScanner == nil {
+		return fmt.Errorf("privacy scanner not enabled")
+	}
+	return c.privacyScanner.RemoveTrackers(ctx, browser, trackerIDs)
 }
 
 //
@@ -406,27 +438,42 @@ func (c *Client) CleanQuarantine(ctx context.Context, olderThan time.Duration) (
 }
 
 //
-// Rule Management Operations - Stubs for Phase 3
+// Rule Management Operations
 //
 
 func (c *Client) UpdateRules(ctx context.Context) error {
-	return fmt.Errorf("rule updates not yet implemented for library mode")
+	if c.ruleManager == nil {
+		return fmt.Errorf("rule manager not enabled")
+	}
+	return c.ruleManager.UpdateRules(ctx)
 }
 
 func (c *Client) ListRuleRepositories() ([]*RuleRepository, error) {
-	return nil, fmt.Errorf("rule repository listing not yet implemented for library mode")
+	if c.ruleManager == nil {
+		return nil, fmt.Errorf("rule manager not enabled")
+	}
+	return c.ruleManager.ListRuleRepositories()
 }
 
 func (c *Client) AddRuleRepository(ctx context.Context, url, branch string) error {
-	return fmt.Errorf("adding rule repositories not yet implemented for library mode")
+	if c.ruleManager == nil {
+		return fmt.Errorf("rule manager not enabled")
+	}
+	return c.ruleManager.AddRuleRepository(ctx, url, branch)
 }
 
 func (c *Client) RemoveRuleRepository(url string) error {
-	return fmt.Errorf("removing rule repositories not yet implemented for library mode")
+	if c.ruleManager == nil {
+		return fmt.Errorf("rule manager not enabled")
+	}
+	return c.ruleManager.RemoveRuleRepository(url)
 }
 
 func (c *Client) GetRuleInfo() (*RuleInfo, error) {
-	return nil, fmt.Errorf("rule info not yet implemented for library mode")
+	if c.ruleManager == nil {
+		return nil, fmt.Errorf("rule manager not enabled")
+	}
+	return c.ruleManager.GetRuleInfo()
 }
 
 //
