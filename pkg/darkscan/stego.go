@@ -29,6 +29,7 @@ type StegoResult struct {
 	DCTAnalysis      *DCTAnalysis
 	StatAnalysis     *StatisticalAnalysis
 	RecommendedAction string
+	Error            error  // Error encountered during scanning (if any)
 }
 
 // StegoTechnique represents a detected steganography technique

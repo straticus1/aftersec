@@ -11,6 +11,7 @@ type Config struct {
 	DaemonSocket      string `yaml:"daemon_socket" json:"daemon_socket"`            // Unix socket path
 	DaemonTCPAddr     string `yaml:"daemon_tcp_addr" json:"daemon_tcp_addr"`        // TCP fallback address
 	FallbackToLibrary bool   `yaml:"fallback_to_library" json:"fallback_to_library"` // Fallback if daemon unavailable
+	DaemonToken       string `yaml:"daemon_token" json:"daemon_token"`              // Bearer token for daemon API
 
 	// Feature configuration
 	Privacy     PrivacyConfig     `yaml:"privacy" json:"privacy"`
@@ -39,6 +40,12 @@ type EnginesConfig struct {
 	CAPA       CAPAConfig       `yaml:"capa" json:"capa"`
 	Viper      ViperConfig      `yaml:"viper" json:"viper"`
 	VirusTotal VirusTotalConfig `yaml:"virustotal" json:"virustotal"`
+	Sandbox    SandboxConfig    `yaml:"sandbox" json:"sandbox"`
+}
+
+// SandboxConfig configures the Unicorn CPU emulation engine
+type SandboxConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
 // DocumentConfig configures the Document parsing engine
@@ -143,10 +150,11 @@ func DefaultConfig() *Config {
 		CLIBinaryPath:  "darkscan",
 
 		// Daemon configuration (hybrid mode)
-		UseDaemon:         false, // Start disabled, user can enable
+		UseDaemon:         true, // Enabled by default for resilience
 		DaemonSocket:      "/tmp/darkscand.sock",
 		DaemonTCPAddr:     "127.0.0.1:8080",
 		FallbackToLibrary: true, // Always fallback if daemon unavailable
+		DaemonToken:       "",   // Default to no token
 
 		// Privacy scanner
 		Privacy: PrivacyConfig{
@@ -236,6 +244,9 @@ func DefaultConfig() *Config {
 			VirusTotal: VirusTotalConfig{
 				Enabled: false,
 				APIKey:  "",
+			},
+			Sandbox: SandboxConfig{
+				Enabled: false,
 			},
 		},
 	}

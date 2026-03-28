@@ -142,6 +142,18 @@ func (c *Client) getEnabledEngines() []string {
 	if c.config.Engines.Viper.Enabled {
 		engines = append(engines, "Viper")
 	}
+	if c.config.Engines.Heuristics.Enabled {
+		engines = append(engines, "Heuristics")
+	}
+	if c.config.Engines.Document.Enabled {
+		engines = append(engines, "Document")
+	}
+	if c.config.Engines.VirusTotal.Enabled {
+		engines = append(engines, "VirusTotal")
+	}
+	if c.config.Engines.Sandbox.Enabled {
+		engines = append(engines, "Sandbox")
+	}
 
 	return engines
 }

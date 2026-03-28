@@ -9,6 +9,8 @@ import (
 
 	dscapa "github.com/afterdarksys/darkscan/pkg/capa"
 	dsclamav "github.com/afterdarksys/darkscan/pkg/clamav"
+	dsheuristics "github.com/afterdarksys/darkscan/pkg/heuristics"
+	dssandbox "github.com/afterdarksys/darkscan/pkg/sandbox"
 	dsscanner "github.com/afterdarksys/darkscan/pkg/scanner"
 	dsviper "github.com/afterdarksys/darkscan/pkg/viper"
 	dsyara "github.com/afterdarksys/darkscan/pkg/yara"
@@ -138,6 +140,10 @@ func NewClient(cfg *Config) (*Client, error) {
 	}
 	client.containerScanner = containerScanner
 
+	// Register middlewares
+	client.scanner.RegisterMiddleware(&FileTypeMiddleware{client: client})
+	client.scanner.RegisterMiddleware(&HashStoreMiddleware{client: client})
+
 	return client, nil
 }
 
@@ -198,6 +204,18 @@ func (c *Client) initializeEngines() error {
 		}
 	}
 
+	// Heuristics Engine
+	if c.config.Engines.Heuristics.Enabled {
+		engine := dsheuristics.New()
+		c.scanner.RegisterEngine(engine)
+	}
+
+	// Sandbox Engine
+	if c.config.Engines.Sandbox.Enabled {
+		engine := dssandbox.New()
+		c.scanner.RegisterEngine(engine)
+	}
+
 	if len(errors) > 0 {
 		return fmt.Errorf("engine initialization errors: %v", errors)
 	}
@@ -207,58 +225,7 @@ func (c *Client) initializeEngines() error {
 
 // ScanFile scans a single file with all enabled engines
 func (c *Client) ScanFile(ctx context.Context, path string) (*ScanResult, error) {
-	// File type validation (if enabled)
-	if c.fileTypeDetector != nil && c.config.FileType.DetectSpoofing {
-		if err := c.fileTypeDetector.ValidateBeforeScan(ctx, path, true); err != nil {
-			return &ScanResult{
-				FilePath: path,
-				Error:    err,
-			}, err
-		}
-	}
-
-	// Hash store deduplication check (if enabled)
-	if c.hashStore != nil && c.config.HashStore.DeduplicateScans {
-		hash, err := CalculateFileHash(path)
-		if err == nil {
-			if entry, err := c.hashStore.CheckHash(ctx, hash); err == nil && entry != nil {
-				// Check if entry is recent enough to skip rescan
-				retentionDays := c.config.HashStore.RetentionDays
-				if retentionDays == 0 {
-					retentionDays = 90
-				}
-				if time.Since(entry.LastSeen) < time.Duration(retentionDays)*24*time.Hour {
-					// Return cached result from hash store
-					return &ScanResult{
-						FilePath:    path,
-						Infected:    entry.Infected,
-						Threats:     entry.Threats,
-						EngineCount: len(c.getEnabledEngines()),
-					}, nil
-				}
-			}
-		}
-	}
-
-	// Memory cache check (backward compatibility)
-	if c.config.CacheEnabled {
-		if info, err := os.Stat(path); err == nil {
-			cacheKey := path + "_" + info.ModTime().String()
-			if val, ok := c.cache.Load(cacheKey); ok {
-				entry := val.(cacheEntry)
-				ttl, parseErr := time.ParseDuration(c.config.CacheTTL)
-				if parseErr != nil || ttl == 0 {
-					ttl = 24 * time.Hour
-				}
-				if time.Since(entry.Timestamp) < ttl {
-					return entry.Result, nil
-				}
-				c.cache.Delete(cacheKey)
-			}
-		}
-	}
-
-	// Perform actual scan
+	// Perform actual scan. Middlewares will intercept and handle filetype checking, caching, etc.
 	results, err := c.scanner.ScanFile(ctx, path)
 	if err != nil {
 		return &ScanResult{
@@ -269,23 +236,9 @@ func (c *Client) ScanFile(ctx context.Context, path string) (*ScanResult, error)
 
 	aggregated := c.aggregateResults(path, results)
 
-	// Store in hash store
-	if c.hashStore != nil {
-		if err := c.hashStore.StoreResult(ctx, aggregated); err != nil {
-			// Log error but don't fail the scan
-			fmt.Fprintf(os.Stderr, "Warning: failed to store scan result in hash store: %v\n", err)
-		}
-	}
-
-	// Memory cache (backward compatibility)
-	if c.config.CacheEnabled {
-		if info, err := os.Stat(path); err == nil {
-			cacheKey := path + "_" + info.ModTime().String()
-			c.cache.Store(cacheKey, cacheEntry{
-				Result:    aggregated,
-				Timestamp: time.Now(),
-			})
-		}
+	// Keep EngineCount equivalent to enabled engines if returned from cache
+	if len(results) == 1 && (results[0].ScanEngine == "HashStore" || results[0].ScanEngine == "MemoryCache") {
+		aggregated.EngineCount = len(c.getEnabledEngines())
 	}
 
 	return aggregated, nil

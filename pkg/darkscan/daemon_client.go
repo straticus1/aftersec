@@ -9,6 +9,7 @@ import (
 
 	dsclient "github.com/afterdarksys/darkscan/pkg/api/client"
 	dsscanner "github.com/afterdarksys/darkscan/pkg/scanner"
+	"github.com/afterdarksys/darkscan/pkg/store"
 )
 
 // DaemonClient implements DarkScanClient by connecting to the DarkScan daemon.
@@ -45,6 +46,7 @@ func NewDaemonClient(cfg *Config, socketPath, tcpAddr string) (*DaemonClient, er
 	apiClient, err := dsclient.NewClient(
 		baseURL,
 		socketPath,
+		cfg.DaemonToken,
 		time.Minute,  // request timeout
 		2*time.Second, // connect timeout
 	)
@@ -360,11 +362,57 @@ func (d *DaemonClient) DetectSpoofing(ctx context.Context, path string, recursiv
 }
 
 func (d *DaemonClient) DetectSteganography(ctx context.Context, path string) (*StegoResult, error) {
-	return nil, fmt.Errorf("steganography detection not yet implemented for daemon mode")
+	analysis, err := d.apiClient.AnalyzeStego(path)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &StegoResult{
+		FilePath:   analysis.FilePath,
+		FileType:   analysis.Format,
+		Suspicious: analysis.Suspicious,
+		Confidence: float64(analysis.Confidence) / 100.0,
+		Techniques: []StegoTechnique{},
+	}
+
+	for _, ind := range analysis.Indicators {
+		result.Techniques = append(result.Techniques, StegoTechnique{
+			Name:        ind.Type,
+			Detected:    true,
+			Confidence:  float64(ind.Confidence) / 100.0,
+			Description: ind.Description,
+			Indicators:  []string{fmt.Sprintf("Severity: %s", ind.Severity)},
+		})
+	}
+	
+	for _, sig := range analysis.Signatures {
+		result.Techniques = append(result.Techniques, StegoTechnique{
+			Name:        sig.Tool,
+			Detected:    true,
+			Confidence:  float64(sig.Confidence) / 100.0,
+			Description: sig.Description,
+			Indicators:  []string{fmt.Sprintf("Version: %s", sig.Version)},
+		})
+	}
+
+	return result, nil
 }
 
 func (d *DaemonClient) BatchDetectSteganography(ctx context.Context, paths []string) ([]*StegoResult, error) {
-	return nil, fmt.Errorf("batch steganography detection not yet implemented for daemon mode")
+	var results []*StegoResult
+	for _, path := range paths {
+		res, err := d.DetectSteganography(ctx, path)
+		if err == nil {
+			results = append(results, res)
+		} else {
+			results = append(results, &StegoResult{
+				FilePath:   path,
+				Suspicious: false,
+				Error:      err,
+			})
+		}
+	}
+	return results, nil
 }
 
 func (d *DaemonClient) ScanContainerImage(ctx context.Context, imageRef string) (*ContainerScanResult, error) {
@@ -372,11 +420,49 @@ func (d *DaemonClient) ScanContainerImage(ctx context.Context, imageRef string) 
 }
 
 func (d *DaemonClient) CheckHash(ctx context.Context, hash string) (*HashEntry, error) {
-	return nil, fmt.Errorf("hash checking not yet implemented for daemon mode")
+	entry, found, err := d.apiClient.CheckHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	if !found || entry == nil {
+		return nil, nil // Not found but no error
+	}
+
+	// Convert abstract store.HashCacheEntry to aftersec.HashEntry
+	var threats []Threat
+	if entry.Threats != "" {
+		threats = []Threat{{Name: entry.Threats}}
+	}
+
+	return &HashEntry{
+		Hash:      entry.Hash,
+		Infected:  entry.Infected,
+		Threats:   threats,
+		FirstSeen: entry.FirstSeen,
+		LastSeen:  entry.LastSeen,
+		ScanCount: entry.ScanCount,
+	}, nil
 }
 
 func (d *DaemonClient) StoreResult(ctx context.Context, result *ScanResult) error {
-	return fmt.Errorf("result storage not yet implemented for daemon mode")
+	hash, err := CalculateFileHash(result.FilePath)
+	if err != nil {
+		return err
+	}
+
+	// Reconstruct a store.HashCacheEntry
+	entry := store.HashCacheEntry{
+		Hash:      hash,
+		SHA256:    hash,
+		Infected:  result.Infected,
+		Threats:   "",
+	}
+	
+	if len(result.Threats) > 0 {
+		entry.Threats = result.Threats[0].Name
+	}
+	
+	return d.apiClient.UpdateHashCache(entry)
 }
 
 func (d *DaemonClient) GetScanHistory(ctx context.Context, filters HistoryFilter) ([]*HashEntry, error) {
