@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	dscapa "github.com/afterdarktech/darkscan/pkg/capa"
-	dsclamav "github.com/afterdarktech/darkscan/pkg/clamav"
-	dsscanner "github.com/afterdarktech/darkscan/pkg/scanner"
-	dsviper "github.com/afterdarktech/darkscan/pkg/viper"
-	dsyara "github.com/afterdarktech/darkscan/pkg/yara"
+	dscapa "github.com/afterdarksys/darkscan/pkg/capa"
+	dsclamav "github.com/afterdarksys/darkscan/pkg/clamav"
+	dsscanner "github.com/afterdarksys/darkscan/pkg/scanner"
+	dsviper "github.com/afterdarksys/darkscan/pkg/viper"
+	dsyara "github.com/afterdarksys/darkscan/pkg/yara"
 )
 
 type cacheEntry struct {

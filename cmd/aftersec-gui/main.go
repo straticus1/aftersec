@@ -1657,6 +1657,81 @@ func main() {
 		return container.NewBorder(nil, inputRow, nil, nil, chatHistory)
 	}
 	
+	// System Information Tab
+	buildSystemInfoTab := func() fyne.CanvasObject {
+		infoText := widget.NewLabel("Loading system information...")
+		infoText.Wrapping = fyne.TextWrapWord
+
+		refreshBtn := widget.NewButton("Refresh Information", nil)
+
+		exportJSONBtn := widget.NewButton("Export JSON", func() {
+			info, err := scanners.GetSystemVersionInfo()
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to get version info: %v", err), w)
+				return
+			}
+
+			// Update AI info from config
+			info.AI = scanners.AIVersion{
+				Provider:       fullCfg.Daemon.AI.Provider,
+				Model:          fullCfg.Daemon.AI.Model,
+				GeminiModel:    fullCfg.Daemon.AI.GeminiModel,
+				OpenAIModel:    fullCfg.Daemon.AI.OpenAIModel,
+				AnthropicModel: fullCfg.Daemon.AI.AnthropicModel,
+				Available:      fullCfg.Daemon.AI.Provider != "",
+			}
+
+			jsonStr, err := scanners.FormatVersionJSON(info)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to format JSON: %v", err), w)
+				return
+			}
+
+			dialog.ShowFileSave(func(uc fyne.URIWriteCloser, err error) {
+				if uc == nil || err != nil {
+					return
+				}
+				defer uc.Close()
+				uc.Write([]byte(jsonStr))
+			}, w)
+		})
+
+		refreshBtn.OnTapped = func() {
+			infoText.SetText("Loading...")
+
+			go func() {
+				info, err := scanners.GetSystemVersionInfo()
+				fyne.Do(func() {
+					if err != nil {
+						infoText.SetText(fmt.Sprintf("Error: %v", err))
+						return
+					}
+
+					// Update AI info from config
+					info.AI = scanners.AIVersion{
+						Provider:       fullCfg.Daemon.AI.Provider,
+						Model:          fullCfg.Daemon.AI.Model,
+						GeminiModel:    fullCfg.Daemon.AI.GeminiModel,
+						OpenAIModel:    fullCfg.Daemon.AI.OpenAIModel,
+						AnthropicModel: fullCfg.Daemon.AI.AnthropicModel,
+						Available:      fullCfg.Daemon.AI.Provider != "",
+					}
+
+					formatted := scanners.FormatVersionInfo(info)
+					infoText.SetText(formatted)
+				})
+			}()
+		}
+
+		// Load initial data
+		refreshBtn.OnTapped()
+
+		buttonRow := container.NewHBox(refreshBtn, exportJSONBtn)
+		scroll := container.NewVScroll(infoText)
+
+		return container.NewBorder(buttonRow, nil, nil, nil, scroll)
+	}
+
 	// Modern Sidebar Navigation
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Dashboard", container.NewCenter(noviceContent)),
@@ -1673,6 +1748,7 @@ func main() {
 		container.NewTabItem("Bandit AI", buildBanditTab()),
 		container.NewTabItem("Container Forensics", buildContainerTab(w)),
 		container.NewTabItem("Revision History", historyTab),
+		container.NewTabItem("System Information", buildSystemInfoTab()),
 		container.NewTabItem("Platform Settings", settingsTab),
 	)
 	tabs.SetTabLocation(container.TabLocationLeading)

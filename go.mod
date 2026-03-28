@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	fyne.io/fyne/v2 v2.7.3
-	github.com/afterdarktech/darkscan v0.0.0
+	github.com/afterdarksys/darkscan v0.0.0
 	github.com/firebase/genkit/go v1.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jung-kurt/gofpdf v1.16.2
@@ -117,6 +117,7 @@ require (
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/genai v1.51.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	howett.net/plist v1.0.1 // indirect
 )
 
-replace github.com/afterdarktech/darkscan => /Users/ryan/development/darkscancli
+replace github.com/afterdarksys/darkscan => /Users/ryan/development/darkscancli

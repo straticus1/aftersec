@@ -22,7 +22,7 @@ import (
 	"aftersec/pkg/darkscan"
 	"aftersec/pkg/forensics"
 	"aftersec/pkg/threatintel"
-	dsforensics "github.com/afterdarktech/darkscan/pkg/forensics"
+	dsforensics "github.com/afterdarksys/darkscan/pkg/forensics"
 )
 
 var (

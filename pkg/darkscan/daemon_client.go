@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	dsclient "github.com/afterdarktech/darkscan/pkg/api/client"
-	dsscanner "github.com/afterdarktech/darkscan/pkg/scanner"
+	dsclient "github.com/afterdarksys/darkscan/pkg/api/client"
+	dsscanner "github.com/afterdarksys/darkscan/pkg/scanner"
 )
 
 // DaemonClient implements DarkScanClient by connecting to the DarkScan daemon.
