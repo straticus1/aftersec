@@ -21,14 +21,15 @@ type cacheEntry struct {
 
 // Client wraps the DarkScan scanner with AfterSec-specific integration
 type Client struct {
-	scanner          *dsscanner.Scanner
-	config           *Config
-	cache            sync.Map
-	hashStore        *HashStore
-	fileTypeDetector *FileTypeDetector
-	profileManager   *ProfileManager
-	privacyScanner   *PrivacyScanner
-	ruleManager      *RuleManager
+	scanner           *dsscanner.Scanner
+	config            *Config
+	cache             sync.Map
+	hashStore         *HashStore
+	fileTypeDetector  *FileTypeDetector
+	profileManager    *ProfileManager
+	privacyScanner    *PrivacyScanner
+	ruleManager       *RuleManager
+	quarantineManager *QuarantineManager
 }
 
 // ScanResult represents unified scan results from DarkScan
@@ -110,6 +111,15 @@ func NewClient(cfg *Config) (*Client, error) {
 			return nil, fmt.Errorf("failed to initialize rule manager: %w", err)
 		}
 		client.ruleManager = ruleManager
+	}
+
+	// Initialize quarantine manager
+	if cfg.Quarantine.Enabled {
+		quarantineManager, err := NewQuarantineManager(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize quarantine manager: %w", err)
+		}
+		client.quarantineManager = quarantineManager
 	}
 
 	return client, nil
@@ -410,31 +420,49 @@ func (c *Client) RemoveTrackers(ctx context.Context, browser string, trackerIDs 
 }
 
 //
-// Quarantine Operations - Stubs for Phase 4
+// Quarantine Operations
 //
 
 func (c *Client) QuarantineFile(ctx context.Context, source string, threats []Threat) (string, error) {
-	return "", fmt.Errorf("quarantine not yet implemented for library mode")
+	if c.quarantineManager == nil {
+		return "", fmt.Errorf("quarantine not enabled")
+	}
+	return c.quarantineManager.QuarantineFile(ctx, source, threats)
 }
 
 func (c *Client) ListQuarantine(ctx context.Context) ([]*QuarantineInfo, error) {
-	return nil, fmt.Errorf("quarantine listing not yet implemented for library mode")
+	if c.quarantineManager == nil {
+		return nil, fmt.Errorf("quarantine not enabled")
+	}
+	return c.quarantineManager.ListQuarantine(ctx)
 }
 
 func (c *Client) GetQuarantineInfo(ctx context.Context, quarantineID string) (*QuarantineInfo, error) {
-	return nil, fmt.Errorf("quarantine info not yet implemented for library mode")
+	if c.quarantineManager == nil {
+		return nil, fmt.Errorf("quarantine not enabled")
+	}
+	return c.quarantineManager.GetQuarantineInfo(ctx, quarantineID)
 }
 
 func (c *Client) RestoreQuarantined(ctx context.Context, quarantineID string, destination string) error {
-	return fmt.Errorf("quarantine restore not yet implemented for library mode")
+	if c.quarantineManager == nil {
+		return fmt.Errorf("quarantine not enabled")
+	}
+	return c.quarantineManager.RestoreQuarantined(ctx, quarantineID, destination)
 }
 
 func (c *Client) DeleteQuarantined(ctx context.Context, quarantineID string) error {
-	return fmt.Errorf("quarantine delete not yet implemented for library mode")
+	if c.quarantineManager == nil {
+		return fmt.Errorf("quarantine not enabled")
+	}
+	return c.quarantineManager.DeleteQuarantined(ctx, quarantineID)
 }
 
 func (c *Client) CleanQuarantine(ctx context.Context, olderThan time.Duration) (int, error) {
-	return 0, fmt.Errorf("quarantine cleanup not yet implemented for library mode")
+	if c.quarantineManager == nil {
+		return 0, fmt.Errorf("quarantine not enabled")
+	}
+	return c.quarantineManager.CleanQuarantine(ctx, olderThan)
 }
 
 //
@@ -645,6 +673,11 @@ func (c *Client) GetConnectionStatus() ConnectionStatus {
 
 // Close releases all engine resources
 func (c *Client) Close() error {
+	if c.quarantineManager != nil {
+		if err := c.quarantineManager.Close(); err != nil {
+			return fmt.Errorf("failed to close quarantine manager: %w", err)
+		}
+	}
 	if c.hashStore != nil {
 		if err := c.hashStore.Close(); err != nil {
 			return fmt.Errorf("failed to close hash store: %w", err)

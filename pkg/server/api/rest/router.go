@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"aftersec/pkg/darkscan"
 	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/clamav"
 	grpcserver "aftersec/pkg/server/grpc"
@@ -12,14 +13,15 @@ import (
 
 // Router encapsulates the HTTP routing logic for the management UI
 type Router struct {
-	mux           *http.ServeMux
-	repos         *repository.Repositories
-	clamavHandler *ClamAVHandler
-	enterpriseSrv *grpcserver.Server
+	mux            *http.ServeMux
+	repos          *repository.Repositories
+	clamavHandler  *ClamAVHandler
+	darkscanHandler *DarkScanHandler
+	enterpriseSrv  *grpcserver.Server
 }
 
 // NewRouter initializes a fresh API layout
-func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, enterpriseSrv *grpcserver.Server, clamavStorage *clamav.Storage, clamavUpdater *clamav.Updater) *Router {
+func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, enterpriseSrv *grpcserver.Server, clamavStorage *clamav.Storage, clamavUpdater *clamav.Updater, darkscanClient *darkscan.Client) *Router {
 	mux := http.NewServeMux()
 
 	// Public Health Endpoint
@@ -34,10 +36,17 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 		clamavHandler = NewClamAVHandler(clamavStorage, clamavUpdater)
 	}
 
+	// Initialize DarkScan handler if client is provided
+	var darkscanHandler *DarkScanHandler
+	if darkscanClient != nil {
+		darkscanHandler = NewDarkScanHandler(darkscanClient)
+	}
+
 	router := &Router{
-		mux:           mux,
-		repos:         repos,
-		clamavHandler: clamavHandler,
+		mux:             mux,
+		repos:           repos,
+		clamavHandler:   clamavHandler,
+		darkscanHandler: darkscanHandler,
 	}
 
 	// Organizations API
@@ -104,6 +113,40 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 		mux.HandleFunc("/api/v1/clamav/definitions/", clamavHandler.HandleGetDefinitionFile)
 		// Admin endpoint for forcing updates (requires authentication)
 		mux.HandleFunc("/api/v1/clamav/update", jwtManager.HTTPMiddleware(clamavHandler.HandleForceUpdate))
+	}
+
+	// DarkScan Platform API
+	if darkscanHandler != nil {
+		// Scan operations
+		mux.HandleFunc("/api/v1/darkscan/scan", jwtManager.HTTPMiddleware(darkscanHandler.ScanFile))
+		mux.HandleFunc("/api/v1/darkscan/scan/directory", jwtManager.HTTPMiddleware(darkscanHandler.ScanDirectory))
+
+		// Privacy operations
+		mux.HandleFunc("/api/v1/darkscan/privacy/scan", jwtManager.HTTPMiddleware(darkscanHandler.ScanPrivacy))
+		mux.HandleFunc("/api/v1/darkscan/privacy/findings", jwtManager.HTTPMiddleware(darkscanHandler.GetPrivacyFindings))
+		mux.HandleFunc("/api/v1/darkscan/privacy/trackers", jwtManager.HTTPMiddleware(darkscanHandler.DeleteTrackers))
+
+		// Quarantine operations
+		mux.HandleFunc("/api/v1/darkscan/quarantine", jwtManager.HTTPMiddleware(darkscanHandler.ListQuarantine))
+		mux.HandleFunc("/api/v1/darkscan/quarantine/info", jwtManager.HTTPMiddleware(darkscanHandler.GetQuarantineInfo))
+		mux.HandleFunc("/api/v1/darkscan/quarantine/restore", jwtManager.HTTPMiddleware(darkscanHandler.RestoreQuarantined))
+		mux.HandleFunc("/api/v1/darkscan/quarantine/delete", jwtManager.HTTPMiddleware(darkscanHandler.DeleteQuarantined))
+
+		// Rule management
+		mux.HandleFunc("/api/v1/darkscan/rules/update", jwtManager.HTTPMiddleware(darkscanHandler.UpdateRules))
+		mux.HandleFunc("/api/v1/darkscan/rules/repositories", jwtManager.HTTPMiddleware(darkscanHandler.ListRuleRepositories))
+
+		// Profiles
+		mux.HandleFunc("/api/v1/darkscan/profiles", jwtManager.HTTPMiddleware(darkscanHandler.ListProfiles))
+
+		// History
+		mux.HandleFunc("/api/v1/darkscan/history", jwtManager.HTTPMiddleware(darkscanHandler.GetHistory))
+
+		// File type detection
+		mux.HandleFunc("/api/v1/darkscan/filetype/identify", jwtManager.HTTPMiddleware(darkscanHandler.IdentifyFileType))
+
+		// Status
+		mux.HandleFunc("/api/v1/darkscan/status", jwtManager.HTTPMiddleware(darkscanHandler.GetStatus))
 	}
 
 	return router

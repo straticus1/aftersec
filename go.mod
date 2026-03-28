@@ -12,6 +12,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.37
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/spf13/cobra v1.10.2
+	github.com/unicorn-engine/unicorn v0.0.0-20260217064959-7c5db94191de
 	go.starlark.net v0.0.0-20260324133313-ffb3f39dd27a
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.10
@@ -74,7 +75,6 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/unicorn-engine/unicorn v0.0.0-20260217064959-7c5db94191de // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect

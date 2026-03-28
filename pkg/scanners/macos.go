@@ -445,7 +445,9 @@ func (s *MacOSScanner) Scan(progress func(percent float64, message string)) (*co
 	// 24. Delegate to Deep Scanning Modules
 	ScanSecrets(addFinding)
 	ScanVulnerabilities(addFinding)
+	ScanMalware(addFinding)
 	plugins.ScanStarlark(s.db, addFinding)
 
 	return state, nil
 }
+
