@@ -144,6 +144,15 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 
 		// File type detection
 		mux.HandleFunc("/api/v1/darkscan/filetype/identify", jwtManager.HTTPMiddleware(darkscanHandler.IdentifyFileType))
+		mux.HandleFunc("/api/v1/darkscan/filetype/verify", jwtManager.HTTPMiddleware(darkscanHandler.VerifyExtension))
+		mux.HandleFunc("/api/v1/darkscan/filetype/spoofing", jwtManager.HTTPMiddleware(darkscanHandler.DetectSpoofing))
+
+		// Steganography detection
+		mux.HandleFunc("/api/v1/darkscan/stego/detect", jwtManager.HTTPMiddleware(darkscanHandler.DetectSteganography))
+		mux.HandleFunc("/api/v1/darkscan/stego/batch", jwtManager.HTTPMiddleware(darkscanHandler.BatchDetectSteganography))
+
+		// Container image scanning
+		mux.HandleFunc("/api/v1/darkscan/container/scan", jwtManager.HTTPMiddleware(darkscanHandler.ScanContainerImage))
 
 		// Status
 		mux.HandleFunc("/api/v1/darkscan/status", jwtManager.HTTPMiddleware(darkscanHandler.GetStatus))

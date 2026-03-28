@@ -561,6 +561,18 @@ func (c *CLIClient) DetectSpoofing(ctx context.Context, path string, recursive b
 	return nil, fmt.Errorf("spoofing detection not yet implemented for CLI mode")
 }
 
+func (c *CLIClient) DetectSteganography(ctx context.Context, path string) (*StegoResult, error) {
+	return nil, fmt.Errorf("steganography detection not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) BatchDetectSteganography(ctx context.Context, paths []string) ([]*StegoResult, error) {
+	return nil, fmt.Errorf("batch steganography detection not yet implemented for CLI mode")
+}
+
+func (c *CLIClient) ScanContainerImage(ctx context.Context, imageRef string) (*ContainerScanResult, error) {
+	return nil, fmt.Errorf("container image scanning not yet implemented for CLI mode")
+}
+
 func (c *CLIClient) CheckHash(ctx context.Context, hash string) (*HashEntry, error) {
 	return nil, fmt.Errorf("hash checking not yet implemented for CLI mode")
 }

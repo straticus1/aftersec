@@ -359,6 +359,18 @@ func (d *DaemonClient) DetectSpoofing(ctx context.Context, path string, recursiv
 	return nil, fmt.Errorf("spoofing detection not yet implemented for daemon mode")
 }
 
+func (d *DaemonClient) DetectSteganography(ctx context.Context, path string) (*StegoResult, error) {
+	return nil, fmt.Errorf("steganography detection not yet implemented for daemon mode")
+}
+
+func (d *DaemonClient) BatchDetectSteganography(ctx context.Context, paths []string) ([]*StegoResult, error) {
+	return nil, fmt.Errorf("batch steganography detection not yet implemented for daemon mode")
+}
+
+func (d *DaemonClient) ScanContainerImage(ctx context.Context, imageRef string) (*ContainerScanResult, error) {
+	return nil, fmt.Errorf("container image scanning not yet implemented for daemon mode")
+}
+
 func (d *DaemonClient) CheckHash(ctx context.Context, hash string) (*HashEntry, error) {
 	return nil, fmt.Errorf("hash checking not yet implemented for daemon mode")
 }

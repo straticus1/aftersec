@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // FileTypeDetector wraps file type identification
@@ -86,18 +87,63 @@ func detectFileType(header []byte) (fileType, ext, mime string) {
 
 	// Check common file signatures
 	switch {
+	// Archives
 	case header[0] == 0x50 && header[1] == 0x4B && header[2] == 0x03 && header[3] == 0x04:
 		return "ZIP Archive", ".zip", "application/zip"
 	case header[0] == 0x1F && header[1] == 0x8B:
 		return "GZIP Archive", ".gz", "application/gzip"
+
+	// Documents
 	case header[0] == 0x25 && header[1] == 0x50 && header[2] == 0x44 && header[3] == 0x46:
 		return "PDF Document", ".pdf", "application/pdf"
+
+	// Standard Image Formats
 	case header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF:
 		return "JPEG Image", ".jpg", "image/jpeg"
 	case header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47:
 		return "PNG Image", ".png", "image/png"
 	case header[0] == 0x47 && header[1] == 0x49 && header[2] == 0x46:
 		return "GIF Image", ".gif", "image/gif"
+
+	// Additional Image Formats
+	case header[0] == 0x42 && header[1] == 0x4D: // BM
+		return "BMP Image", ".bmp", "image/bmp"
+	case (header[0] == 0x49 && header[1] == 0x49 && header[2] == 0x2A && header[3] == 0x00) || // Little-endian TIFF
+		(header[0] == 0x4D && header[1] == 0x4D && header[2] == 0x00 && header[3] == 0x2A): // Big-endian TIFF
+		return "TIFF Image", ".tiff", "image/tiff"
+	case len(header) >= 12 && header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46 &&
+		header[8] == 0x57 && header[9] == 0x45 && header[10] == 0x42 && header[11] == 0x50: // RIFF....WEBP
+		return "WebP Image", ".webp", "image/webp"
+	case (header[0] == 0x00 && header[1] == 0x00 && header[2] == 0x01 && header[3] == 0x00) || // ICO
+		(header[0] == 0x00 && header[1] == 0x00 && header[2] == 0x02 && header[3] == 0x00): // CUR
+		return "Windows Icon", ".ico", "image/x-icon"
+	case len(header) >= 12 && header[4] == 0x66 && header[5] == 0x74 && header[6] == 0x79 && header[7] == 0x70: // ftyp box
+		// Check for HEIC/HEIF
+		if len(header) >= 12 {
+			brandCode := string(header[8:12])
+			switch brandCode {
+			case "heic", "heix", "hevc", "hevx":
+				return "HEIC Image", ".heic", "image/heic"
+			case "mif1", "msf1":
+				return "HEIF Image", ".heif", "image/heif"
+			case "avif":
+				return "AVIF Image", ".avif", "image/avif"
+			}
+		}
+		return "ISO Media File", "", "video/mp4" // Generic fallback
+	case len(header) >= 5 && header[0] == 0x3C && header[1] == 0x3F && header[2] == 0x78 && header[3] == 0x6D && header[4] == 0x6C: // <?xml
+		if len(header) >= 100 {
+			// Check if it's SVG by looking for <svg tag
+			headerStr := string(header[:100])
+			if containsIgnoreCase(headerStr, "<svg") {
+				return "SVG Image", ".svg", "image/svg+xml"
+			}
+		}
+		return "XML Document", ".xml", "application/xml"
+	case len(header) >= 4 && header[0] == 0x3C && header[1] == 0x73 && header[2] == 0x76 && header[3] == 0x67: // <svg
+		return "SVG Image", ".svg", "image/svg+xml"
+
+	// Executables
 	case header[0] == 0x7F && header[1] == 0x45 && header[2] == 0x4C && header[3] == 0x46:
 		return "ELF Executable", "", "application/x-executable"
 	case header[0] == 0x4D && header[1] == 0x5A: // MZ
@@ -106,9 +152,17 @@ func detectFileType(header []byte) (fileType, ext, mime string) {
 		return "Mach-O Executable", "", "application/x-mach-binary"
 	case header[0] == 0xCA && header[1] == 0xFE && header[2] == 0xBA && header[3] == 0xBE:
 		return "Mach-O Universal Binary", "", "application/x-mach-binary"
+
 	default:
 		return "unknown", "", "application/octet-stream"
 	}
+}
+
+// containsIgnoreCase checks if a string contains a substring (case-insensitive)
+func containsIgnoreCase(s, substr string) bool {
+	s = strings.ToLower(s)
+	substr = strings.ToLower(substr)
+	return strings.Contains(s, substr)
 }
 
 // VerifyExtension checks if file extension matches actual content
@@ -191,12 +245,17 @@ func (f *FileTypeDetector) extensionMatches(fileExt, detectedExt string) bool {
 	aliases := map[string][]string{
 		"jpg":  {"jpeg", "jpe"},
 		"jpeg": {"jpg", "jpe"},
+		"jpe":  {"jpg", "jpeg"},
 		"tif":  {"tiff"},
 		"tiff": {"tif"},
 		"htm":  {"html"},
 		"html": {"htm"},
 		"mpg":  {"mpeg"},
 		"mpeg": {"mpg"},
+		"heic": {"heif"},
+		"heif": {"heic"},
+		"svg":  {"svgz"},
+		"svgz": {"svg"},
 	}
 
 	if aliasGroup, ok := aliases[fileExt]; ok {

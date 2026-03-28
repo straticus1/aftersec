@@ -30,6 +30,8 @@ type Client struct {
 	privacyScanner    *PrivacyScanner
 	ruleManager       *RuleManager
 	quarantineManager *QuarantineManager
+	stegoDetector     *StegoDetector
+	containerScanner  *ContainerScanner
 }
 
 // ScanResult represents unified scan results from DarkScan
@@ -121,6 +123,20 @@ func NewClient(cfg *Config) (*Client, error) {
 		}
 		client.quarantineManager = quarantineManager
 	}
+
+	// Initialize steganography detector (always enabled for image analysis)
+	stegoDetector, err := NewStegoDetector(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize steganography detector: %w", err)
+	}
+	client.stegoDetector = stegoDetector
+
+	// Initialize container scanner (always enabled if tools available)
+	containerScanner, err := NewContainerScanner(cfg, client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize container scanner: %w", err)
+	}
+	client.containerScanner = containerScanner
 
 	return client, nil
 }
@@ -669,6 +685,35 @@ func (c *Client) GetConnectionStatus() ConnectionStatus {
 		LastChecked:     time.Now(),
 		Uptime:          "",
 	}
+}
+
+//
+// Steganography Operations
+//
+
+func (c *Client) DetectSteganography(ctx context.Context, path string) (*StegoResult, error) {
+	if c.stegoDetector == nil {
+		return nil, fmt.Errorf("steganography detector not initialized")
+	}
+	return c.stegoDetector.DetectSteganography(ctx, path)
+}
+
+func (c *Client) BatchDetectSteganography(ctx context.Context, paths []string) ([]*StegoResult, error) {
+	if c.stegoDetector == nil {
+		return nil, fmt.Errorf("steganography detector not initialized")
+	}
+	return c.stegoDetector.BatchDetectSteganography(ctx, paths)
+}
+
+//
+// Container Image Scanning Operations
+//
+
+func (c *Client) ScanContainerImage(ctx context.Context, imageRef string) (*ContainerScanResult, error) {
+	if c.containerScanner == nil {
+		return nil, fmt.Errorf("container scanner not initialized")
+	}
+	return c.containerScanner.ScanImage(ctx, imageRef)
 }
 
 // Close releases all engine resources

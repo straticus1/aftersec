@@ -9,6 +9,7 @@ import (
 	"time"
 
 	grpcapi "aftersec/pkg/api/grpc"
+	"aftersec/pkg/darkscan"
 	"aftersec/pkg/server/api/rest"
 	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/clamav"
@@ -74,8 +75,17 @@ func main() {
 
 	enterpriseSrv := grpcserver.NewServer(repos)
 
+	// Initialize DarkScan client
+	darkscanCfg := darkscan.DefaultConfig()
+	darkscanCfg.Enabled = true
+	darkscanClient, err := darkscan.NewClient(darkscanCfg)
+	if err != nil {
+		log.Printf("Warning: DarkScan initialization failed: %v", err)
+		darkscanClient = nil
+	}
+
 	// 2. Start basic REST API
-	mux := rest.NewRouter(jwtManager, repos, enterpriseSrv, clamavStorage, clamavUpdater)
+	mux := rest.NewRouter(jwtManager, repos, enterpriseSrv, clamavStorage, clamavUpdater, darkscanClient)
 
 	go func() {
 		log.Println("Listening for REST API on :8080")

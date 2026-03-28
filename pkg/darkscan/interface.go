@@ -129,6 +129,22 @@ type DarkScanClient interface {
 	// extensions and content types.
 	DetectSpoofing(ctx context.Context, path string, recursive bool) ([]*FileTypeResult, error)
 
+	// Steganography Operations
+
+	// DetectSteganography analyzes an image for hidden data using
+	// LSB analysis, DCT coefficient analysis, and statistical methods.
+	DetectSteganography(ctx context.Context, path string) (*StegoResult, error)
+
+	// BatchDetectSteganography scans multiple images for steganography.
+	BatchDetectSteganography(ctx context.Context, paths []string) ([]*StegoResult, error)
+
+	// Container Image Scanning Operations
+
+	// ScanContainerImage performs comprehensive security scanning of
+	// Docker/OCI container images including vulnerability scanning,
+	// malware detection in layers, secret detection, and config analysis.
+	ScanContainerImage(ctx context.Context, imageRef string) (*ContainerScanResult, error)
+
 	// Hash Store Operations
 
 	// CheckHash looks up a file hash in the scan history database.

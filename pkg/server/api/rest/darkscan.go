@@ -359,7 +359,6 @@ func (h *DarkScanHandler) ListProfiles(w http.ResponseWriter, r *http.Request) {
 
 func (h *DarkScanHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	filters := darkscan.HistoryFilter{
-		FilePath: r.URL.Query().Get("file_path"),
 		Infected: parseBoolQuery(r.URL.Query().Get("infected")),
 		Limit:    100, // Default limit
 	}
@@ -419,6 +418,172 @@ func (h *DarkScanHandler) IdentifyFileType(w http.ResponseWriter, r *http.Reques
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"data":    result,
+	})
+}
+
+//
+// Steganography Operations
+//
+
+func (h *DarkScanHandler) DetectSteganography(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.Path == "" {
+		respondError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+
+	result, err := h.client.DetectSteganography(ctx, req.Path)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data":    result,
+	})
+}
+
+func (h *DarkScanHandler) BatchDetectSteganography(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paths []string `json:"paths"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if len(req.Paths) == 0 {
+		respondError(w, http.StatusBadRequest, "paths array is required and must not be empty")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+
+	results, err := h.client.BatchDetectSteganography(ctx, req.Paths)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data":    results,
+	})
+}
+
+//
+// Container Scanning Operations
+//
+
+func (h *DarkScanHandler) ScanContainerImage(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ImageRef string `json:"image_ref"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.ImageRef == "" {
+		respondError(w, http.StatusBadRequest, "image_ref is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+
+	result, err := h.client.ScanContainerImage(ctx, req.ImageRef)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data":    result,
+	})
+}
+
+//
+// File Type Operations (Enhanced)
+//
+
+func (h *DarkScanHandler) VerifyExtension(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.Path == "" {
+		respondError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	matches, err := h.client.VerifyExtension(ctx, req.Path)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"path":    req.Path,
+			"matches": matches,
+		},
+	})
+}
+
+func (h *DarkScanHandler) DetectSpoofing(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path      string `json:"path"`
+		Recursive bool   `json:"recursive"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.Path == "" {
+		respondError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+
+	results, err := h.client.DetectSpoofing(ctx, req.Path, req.Recursive)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data":    results,
 	})
 }
 
