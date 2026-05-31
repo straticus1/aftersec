@@ -3,8 +3,10 @@ package rest
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
+	"aftersec/pkg/billing"
 	"aftersec/pkg/darkscan"
 	"aftersec/pkg/ratelimit"
 	"aftersec/pkg/server/auth"
@@ -21,6 +23,7 @@ type Router struct {
 	clamavHandler   *ClamAVHandler
 	darkscanHandler *DarkScanHandler
 	enterpriseSrv   *grpcserver.Server
+	stripeClient    *billing.Client
 	banditLimiter   *ratelimit.RedisRateLimiter
 	darkwebLimiter  *ratelimit.RedisRateLimiter
 }
@@ -48,9 +51,22 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 		darkscanHandler = NewDarkScanHandler(darkscanClient)
 	}
 
+	var stripeClient *billing.Client
+	if key := os.Getenv("STRIPE_SECRET_KEY"); key != "" {
+		stripeClient = billing.NewClient(key)
+		if p := os.Getenv("STRIPE_PRICE_PROFESSIONAL"); p != "" {
+			billing.PriceIDs["professional"] = p
+		}
+		if p := os.Getenv("STRIPE_PRICE_ENTERPRISE"); p != "" {
+			billing.PriceIDs["enterprise"] = p
+		}
+	}
+
 	router := &Router{
 		mux:             mux,
 		repos:           repos,
+		enterpriseSrv:   enterpriseSrv,
+		stripeClient:    stripeClient,
 		clamavHandler:   clamavHandler,
 		darkscanHandler: darkscanHandler,
 	}
@@ -94,21 +110,8 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 	mux.HandleFunc("/api/v1/organizations/tier", jwtManager.HTTPMiddleware(router.handleGetTierInfo))
 	mux.HandleFunc("/api/v1/organizations/upgrade", jwtManager.HTTPMiddleware(router.handleUpgradeTier))
 
-	// MDM Remote Action Webhook (Lost Device, Quarantine)
-	mux.HandleFunc("/api/v1/endpoints/action", jwtManager.HTTPMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		// Stub: Decodes the external payload, and dispatches the Command via Redis PubSub
-		// which the active gRPC stream picks up and rapidly shoots down to the client.
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"status": "command_queued",
-			"delivery_target": "sub-second",
-		})
-	}))
+	// MDM Remote Action — dispatches a command to the endpoint's active gRPC stream
+	mux.HandleFunc("/api/v1/endpoints/action", jwtManager.HTTPMiddleware(router.handleEndpointAction))
 
 	// Sigma API
 	mux.HandleFunc("/api/v1/sigma/deploy", jwtManager.HTTPMiddleware(router.handleSigmaDeploy))

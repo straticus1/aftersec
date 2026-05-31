@@ -140,8 +140,25 @@ func (rt *Router) handleUpgradeTier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Process payment through Stripe
-	// For now, just update the tier directly
+	// Process payment through Stripe if configured
+	if rt.stripeClient != nil {
+		if req.PaymentMethodID == "" {
+			http.Error(w, "payment_method_id is required for tier upgrades", http.StatusBadRequest)
+			return
+		}
+		customerID, err := rt.stripeClient.EnsureCustomer(r.Context(), org.ID, org.Name)
+		if err != nil {
+			http.Error(w, "Failed to create billing customer: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, err := rt.stripeClient.Subscribe(r.Context(), customerID, req.PaymentMethodID, req.TargetTier); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
 	org.LicenseTier = req.TargetTier
 	if err := rt.repos.Organizations.Update(r.Context(), org); err != nil {
 		http.Error(w, "Failed to update organization tier", http.StatusInternalServerError)

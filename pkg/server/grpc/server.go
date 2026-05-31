@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"log"
 	"sync"
 
@@ -42,6 +43,25 @@ func NewServer(repos *repository.Repositories) *Server {
 	// Start the ML Evaluator consumer
 	go s.processMLBaselines()
 	return s
+}
+
+// DispatchCommand sends a command to a connected endpoint's active gRPC stream.
+// Returns an error if the endpoint has no active stream or the channel is full.
+func (s *Server) DispatchCommand(endpointID string, cmd *grpcapi.ServerCommand) error {
+	s.mu.RLock()
+	ch, ok := s.activeStreams[endpointID]
+	s.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("endpoint %q has no active command stream", endpointID)
+	}
+
+	select {
+	case ch <- cmd:
+		return nil
+	default:
+		return fmt.Errorf("command channel for endpoint %q is full", endpointID)
+	}
 }
 
 func (s *Server) processMLBaselines() {

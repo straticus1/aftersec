@@ -1,9 +1,12 @@
 package rest
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 
+	grpcapi "aftersec/pkg/api/grpc"
 	"aftersec/pkg/server/repository"
 )
 
@@ -99,4 +102,57 @@ func (rt *Router) deleteEndpoint(w http.ResponseWriter, r *http.Request, id stri
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type EndpointActionRequest struct {
+	EndpointID string `json:"endpoint_id"`
+	Action     string `json:"action"`
+	Payload    string `json:"payload"` // optional base64-encoded parameters
+}
+
+func (rt *Router) handleEndpointAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req EndpointActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.EndpointID == "" || req.Action == "" {
+		http.Error(w, "Missing required fields: endpoint_id, action", http.StatusBadRequest)
+		return
+	}
+
+	cmdID := newCommandID()
+	cmd := &grpcapi.ServerCommand{
+		CommandId: cmdID,
+		Action:    req.Action,
+	}
+
+	if err := rt.enterpriseSrv.DispatchCommand(req.EndpointID, cmd); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"command_id": cmdID,
+		"status":     "command_queued",
+		"delivery":   "sub-second",
+	})
+}
+
+func newCommandID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
