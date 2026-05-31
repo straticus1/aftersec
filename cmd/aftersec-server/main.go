@@ -17,6 +17,7 @@ import (
 	grpcserver "aftersec/pkg/server/grpc"
 	"aftersec/pkg/server/repository"
 	"aftersec/pkg/server/tlsconfig"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 )
 
@@ -84,8 +85,20 @@ func main() {
 		darkscanClient = nil
 	}
 
+	// Optional Redis client for rate limiting
+	var redisClient *redis.Client
+	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
+		opt, err := redis.ParseURL(redisURL)
+		if err != nil {
+			log.Printf("Warning: invalid REDIS_URL, rate limiting disabled: %v", err)
+		} else {
+			redisClient = redis.NewClient(opt)
+			log.Println("Redis rate limiting enabled")
+		}
+	}
+
 	// 2. Start basic REST API
-	mux := rest.NewRouter(jwtManager, repos, enterpriseSrv, clamavStorage, clamavUpdater, darkscanClient)
+	mux := rest.NewRouter(jwtManager, repos, enterpriseSrv, clamavStorage, clamavUpdater, darkscanClient, redisClient)
 
 	go func() {
 		log.Println("Listening for REST API on :8080")

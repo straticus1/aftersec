@@ -113,6 +113,13 @@ func (rl *RedisRateLimiter) tryConsumeToken(ctx context.Context, key string) (bo
 	return result == 1, nil
 }
 
+// TryConsume attempts to consume a token without blocking.
+// Returns true if the request is allowed, false if rate limited.
+func (rl *RedisRateLimiter) TryConsume(ctx context.Context, identifier string) (bool, error) {
+	key := fmt.Sprintf("%s:%s", rl.keyPrefix, identifier)
+	return rl.tryConsumeToken(ctx, key)
+}
+
 // Reset clears the rate limit for a specific identifier
 func (rl *RedisRateLimiter) Reset(ctx context.Context, identifier string) error {
 	key := fmt.Sprintf("%s:%s", rl.keyPrefix, identifier)

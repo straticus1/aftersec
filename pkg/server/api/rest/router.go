@@ -3,25 +3,31 @@ package rest
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"aftersec/pkg/darkscan"
+	"aftersec/pkg/ratelimit"
 	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/clamav"
 	grpcserver "aftersec/pkg/server/grpc"
 	"aftersec/pkg/server/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 // Router encapsulates the HTTP routing logic for the management UI
 type Router struct {
-	mux            *http.ServeMux
-	repos          *repository.Repositories
-	clamavHandler  *ClamAVHandler
+	mux             *http.ServeMux
+	repos           *repository.Repositories
+	clamavHandler   *ClamAVHandler
 	darkscanHandler *DarkScanHandler
-	enterpriseSrv  *grpcserver.Server
+	enterpriseSrv   *grpcserver.Server
+	banditLimiter   *ratelimit.RedisRateLimiter
+	darkwebLimiter  *ratelimit.RedisRateLimiter
 }
 
-// NewRouter initializes a fresh API layout
-func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, enterpriseSrv *grpcserver.Server, clamavStorage *clamav.Storage, clamavUpdater *clamav.Updater, darkscanClient *darkscan.Client) *Router {
+// NewRouter initializes a fresh API layout.
+// redisClient is optional: pass nil to disable rate limiting.
+func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, enterpriseSrv *grpcserver.Server, clamavStorage *clamav.Storage, clamavUpdater *clamav.Updater, darkscanClient *darkscan.Client, redisClient *redis.Client) *Router {
 	mux := http.NewServeMux()
 
 	// Public Health Endpoint
@@ -49,6 +55,12 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 		darkscanHandler: darkscanHandler,
 	}
 
+	if redisClient != nil {
+		// 10 req/min for AI queries; 20 req/min for dark web intel
+		router.banditLimiter = ratelimit.NewRedisRateLimiter(redisClient, "rl:bandit", 10, time.Minute/10)
+		router.darkwebLimiter = ratelimit.NewRedisRateLimiter(redisClient, "rl:darkweb", 20, time.Minute/20)
+	}
+
 	// Organizations API
 	mux.HandleFunc("/api/v1/organizations", jwtManager.HTTPMiddleware(router.handleOrganizations))
 	mux.HandleFunc("/api/v1/organizations/", jwtManager.HTTPMiddleware(router.handleOrganization))
@@ -63,13 +75,16 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 
 	// Bandit AI API (requires Professional tier)
 	mux.HandleFunc("/api/v1/bandit/query", jwtManager.HTTPMiddleware(
-		router.RequireTier(TierProfessional)(HandleBanditQuery)))
+		router.withRateLimit(router.banditLimiter,
+			router.RequireTier(TierProfessional)(HandleBanditQuery))))
 
 	// Dark Web Intelligence API (requires Professional tier)
 	mux.HandleFunc("/api/v1/darkweb/alerts", jwtManager.HTTPMiddleware(
-		router.RequireTier(TierProfessional)(HandleDarkWebAlerts)))
+		router.withRateLimit(router.darkwebLimiter,
+			router.RequireTier(TierProfessional)(HandleDarkWebAlerts))))
 	mux.HandleFunc("/api/v1/darkweb/config", jwtManager.HTTPMiddleware(
-		router.RequireTier(TierProfessional)(HandleDarkWebConfig)))
+		router.withRateLimit(router.darkwebLimiter,
+			router.RequireTier(TierProfessional)(HandleDarkWebConfig))))
 
 	// AI Budget and Usage API (all tiers)
 	mux.HandleFunc("/api/v1/ai/budget", jwtManager.HTTPMiddleware(router.handleAIBudget))
@@ -168,4 +183,36 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.mux.ServeHTTP(w, req)
+}
+
+// withRateLimit wraps a handler with per-IP rate limiting.
+// If limiter is nil (Redis not configured), the handler runs unrestricted.
+func (r *Router) withRateLimit(limiter *ratelimit.RedisRateLimiter, next http.HandlerFunc) http.HandlerFunc {
+	if limiter == nil {
+		return next
+	}
+	return func(w http.ResponseWriter, req *http.Request) {
+		ip, _, _ := splitHostPort(req.RemoteAddr)
+		allowed, err := limiter.TryConsume(req.Context(), ip)
+		if err != nil {
+			// Redis error — fail open so an outage doesn't block legitimate traffic
+			next(w, req)
+			return
+		}
+		if !allowed {
+			http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+			return
+		}
+		next(w, req)
+	}
+}
+
+// splitHostPort splits host:port, returning host on error.
+func splitHostPort(addr string) (host, port string, err error) {
+	for i := len(addr) - 1; i >= 0; i-- {
+		if addr[i] == ':' {
+			return addr[:i], addr[i+1:], nil
+		}
+	}
+	return addr, "", nil
 }
