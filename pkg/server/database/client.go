@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -27,6 +28,7 @@ func NewPostgresClient(dsn string) (*Client, error) {
 
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
 
 	log.Println("Successfully connected to PostgreSQL")
 

@@ -44,9 +44,12 @@ func RebuildLaunchServices() error {
 }
 
 func GetBooleanDefault(domain, key string) bool {
-    // simplified read logic without privileged access since standard defaults read is safe
-    out, _ := exec.Command("bash", "-c", fmt.Sprintf("defaults read %s %s || echo 0", domain, key)).CombinedOutput()
-    return strings.Contains(strings.ToLower(string(out)), "1") || strings.Contains(strings.ToLower(string(out)), "true") || strings.Contains(strings.ToLower(string(out)), "yes")
+	out, err := exec.Command("defaults", "read", domain, key).CombinedOutput()
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(string(out)))
+	return lower == "1" || lower == "true" || lower == "yes"
 }
 
 func SetBooleanDefault(domain, key string, enabled bool) error {
@@ -58,6 +61,7 @@ func SetBooleanDefault(domain, key string, enabled bool) error {
 	core.RegisterAllowedScript(script)
 	return core.RunPrivileged(script)
 }
+
 
 func ToggleDashboard(enabled bool) error {
 	err := SetBooleanDefault("com.apple.dashboard", "mcx-disabled", !enabled)

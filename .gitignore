@@ -5,9 +5,9 @@
 *.so
 *.dylib
 bin/
-aftersec
-aftersec-gui
-aftersecd
+/aftersec
+/aftersec-gui
+/aftersecd
 
 # Test binary, built with `go test -c`
 *.test
@@ -49,3 +49,5 @@ bin/
 *.dylib
 *.a
 aftersec-macos-release.tar.gz
+aftersec-installer.pkg
+*.pkg

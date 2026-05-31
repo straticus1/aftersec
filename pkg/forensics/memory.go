@@ -72,7 +72,7 @@ func ScanRunningProcesses(db storage.Manager) ([]ProcessFinding, error) {
 
 		if score > Safe {
 			if db != nil {
-				db.LogTelemetryEvent("memory_forensics", "process_anomaly", "high", fmt.Sprintf(`{"pid": %d, "process": "%s", "score": %f, "reason": "%s"}`, pid, cmdStr, score, reason))
+				db.LogTelemetryEvent("memory_forensics", "process_anomaly", "high", fmt.Sprintf(`{"pid": %d, "process": "%s", "score": %d, "reason": "%s"}`, pid, cmdStr, score, reason))
 			}
 			anomalies = append(anomalies, ProcessFinding{
 				PID:         pid,

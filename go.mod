@@ -120,4 +120,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 )
 
+// Local dev only: clone https://github.com/afterdarksys/darkscancli alongside this repo
+// and update this path to match your machine, or use `go work` for multi-module dev.
 replace github.com/afterdarksys/darkscan => /Users/ryan/development/darkscancli

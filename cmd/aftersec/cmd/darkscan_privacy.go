@@ -362,7 +362,7 @@ func printBrowserResults(results []*darkscan.PrivacyScanResult) {
 			}
 			fmt.Println()
 		} else {
-			fmt.Println("✅ No trackers found\n")
+			fmt.Println("✅ No trackers found")
 		}
 
 		if len(result.TelemetryURLs) > 0 {

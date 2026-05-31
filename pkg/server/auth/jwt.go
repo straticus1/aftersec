@@ -110,9 +110,8 @@ func (m *JWTManager) GRPCStreamInterceptor(srv interface{}, stream grpc.ServerSt
 }
 
 func (m *JWTManager) authorizeGRPC(ctx context.Context, method string) error {
-	// Let enroll pass without standard JWT since it uses an enrollment token, 
-	// unless we enforce it differently over mTLS
-	if strings.HasSuffix(method, "/Enroll") {
+	// Enroll uses an enrollment token enforced over mTLS — exempt only the exact method path
+	if method == "/aftersec.AfterSec/Enroll" {
 		return nil
 	}
 	md, ok := metadata.FromIncomingContext(ctx)
