@@ -101,6 +101,7 @@ type EndpointAIConfig struct {
 	TrainingInterval string         `yaml:"training_interval"` // e.g., "ebd" or "24h"
 	MaxEpochs        int            `yaml:"max_epochs"`
 	LocalModelPath   string         `yaml:"local_model_path"`
+	OrtLibPath       string         `yaml:"ort_lib_path"` // path to libonnxruntime.so; Linux ONNX build only
 }
 
 type DaemonConfig struct {
