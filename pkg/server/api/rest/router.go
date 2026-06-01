@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	grpcapi "aftersec/pkg/api/grpc"
 	"aftersec/pkg/billing"
 	"aftersec/pkg/darkscan"
 	"aftersec/pkg/ratelimit"
@@ -16,13 +17,19 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// enterpriseServer is the subset of grpcserver.Server used by the REST layer.
+type enterpriseServer interface {
+	DispatchCommand(endpointID string, cmd *grpcapi.ServerCommand) error
+	SetPendingSigmaRule(rule string)
+}
+
 // Router encapsulates the HTTP routing logic for the management UI
 type Router struct {
 	mux             *http.ServeMux
 	repos           *repository.Repositories
 	clamavHandler   *ClamAVHandler
 	darkscanHandler *DarkScanHandler
-	enterpriseSrv   *grpcserver.Server
+	enterpriseSrv   enterpriseServer
 	stripeClient    *billing.Client
 	banditLimiter   *ratelimit.RedisRateLimiter
 	darkwebLimiter  *ratelimit.RedisRateLimiter
