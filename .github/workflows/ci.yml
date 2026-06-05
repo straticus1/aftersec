@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  linux-build:
+    name: Linux build (amd64 + arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Checkout darkscan
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.DARKSCAN_REPO }}
+          token: ${{ secrets.DARKSCAN_TOKEN }}
+          path: darkscan-local
+
+      - name: Remap darkscan replace directive
+        run: go mod edit -replace github.com/afterdarksys/darkscan=./darkscan-local
+
+      - name: Build linux/amd64
+        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./cmd/aftersecd/... ./cmd/aftersec/... ./pkg/...
+
+      - name: Build linux/arm64
+        run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./cmd/aftersecd/... ./cmd/aftersec/... ./pkg/...
+
+  darwin-vet:
+    name: macOS vet (no CGO deps)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Checkout darkscan
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.DARKSCAN_REPO }}
+          token: ${{ secrets.DARKSCAN_TOKEN }}
+          path: darkscan-local
+
+      - name: Remap darkscan replace directive
+        run: go mod edit -replace github.com/afterdarksys/darkscan=./darkscan-local
+
+      # CGO_ENABLED=0 skips unicorn/clamav/yara packages that need brew deps.
+      # Full GUI build requires those headers; run locally or in a release job.
+      - name: Vet (darwin, CGO_ENABLED=0)
+        run: CGO_ENABLED=0 go vet ./cmd/aftersecd/... ./cmd/aftersec/... ./pkg/...
