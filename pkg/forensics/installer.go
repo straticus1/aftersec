@@ -1,3 +1,5 @@
+//go:build darwin
+
 package forensics
 
 import (
@@ -7,14 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 )
-
-// PkgAnalysisResult holds the extracted scripts from a macOS Installer Package
-type PkgAnalysisResult struct {
-	PreinstallScript    string
-	PostinstallScript   string
-	RawScriptsExtracted int
-	Error               error
-}
 
 // AnalyzeInstaller uses native pkgutil to recursively dump an installer package 
 // into a temporary sandbox and extract potentially dangerous root-level execution scripts.

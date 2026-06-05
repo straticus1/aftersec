@@ -15,7 +15,7 @@ import (
 
 func buildSandboxTab(w fyne.Window) fyne.CanvasObject {
 	pathEntry := widget.NewEntry()
-	pathEntry.SetPlaceHolder("Enter full path to macOS binary (Mach-O) to trace...")
+	pathEntry.SetPlaceHolder("Enter full path to binary to emulate...")
 
 	resultsVBox := container.NewVBox()
 	resultsScroll := container.NewVScroll(resultsVBox)
