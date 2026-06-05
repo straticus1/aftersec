@@ -2,36 +2,68 @@ package scanners
 
 import (
 	"aftersec/pkg/core"
-	"os/exec"
-	"strings"
+	"aftersec/pkg/patchmgr"
+	"fmt"
 )
 
 func ScanVulnerabilities(addFinding func(core.Finding)) {
-	// 1. Brew Outdated / Vulnerable check
-	// We'll run a fast command. Full 'brew audit' is too slow for GUI sync.
-	// Let's just check if brew requires updates or formulas are outdated.
-	brewOut, _ := exec.Command("brew", "outdated").CombinedOutput()
-	brewStr := strings.TrimSpace(string(brewOut))
-	
-	lines := strings.Split(brewStr, "\n")
-	passed := len(brewStr) == 0
-	val := "Up to date"
-	if !passed {
-		val = "Outdated packages found"
-		if len(lines) > 5 {
-			val = "5+ outdated packages found"
+	for _, mgr := range patchmgr.ForPlatform() {
+		outdated, err := mgr.ListOutdated()
+		if err != nil {
+			addFinding(core.Finding{
+				Category:    "Patch Management",
+				Name:        fmt.Sprintf("%s: scan failed", mgr.Name()),
+				Description: "Could not retrieve package list.",
+				Severity:    core.Low,
+				CurrentVal:  err.Error(),
+				ExpectedVal: "no error",
+				Passed:      false,
+			})
+			continue
+		}
+
+		patchmgr.EnrichWithCVEs(outdated)
+
+		var noCVEOutdated []patchmgr.OutdatedPackage
+		for _, pkg := range outdated {
+			if len(pkg.CVEs) == 0 {
+				noCVEOutdated = append(noCVEOutdated, pkg)
+				continue
+			}
+			addFinding(core.Finding{
+				Category:          "Patch Management",
+				Name:              fmt.Sprintf("[%s] %s outdated", mgr.Name(), pkg.Name),
+				Description:       fmt.Sprintf("Installed: %s, Latest: %s", pkg.Version, pkg.LatestVersion),
+				Severity:          patchmgr.CVESeverity(pkg.CVEs),
+				CurrentVal:        pkg.Version,
+				ExpectedVal:       pkg.LatestVersion,
+				LogContext:        patchmgr.FormatCVEs(pkg.CVEs),
+				Passed:            false,
+				RemediationScript: mgr.RemediateCmd(pkg),
+			})
+		}
+
+		// Rolled-up finding for outdated packages without known CVEs
+		if len(noCVEOutdated) > 0 {
+			addFinding(core.Finding{
+				Category:    "Patch Management",
+				Name:        fmt.Sprintf("[%s] %d outdated package(s), no known CVEs", mgr.Name(), len(noCVEOutdated)),
+				Severity:    core.Low,
+				CurrentVal:  fmt.Sprintf("%d outdated", len(noCVEOutdated)),
+				ExpectedVal: "0 outdated",
+				Passed:      false,
+			})
+		}
+
+		if len(outdated) == 0 {
+			addFinding(core.Finding{
+				Category:    "Patch Management",
+				Name:        fmt.Sprintf("[%s] all packages up to date", mgr.Name()),
+				Severity:    core.Low,
+				CurrentVal:  "up to date",
+				ExpectedVal: "up to date",
+				Passed:      true,
+			})
 		}
 	}
-
-	addFinding(core.Finding{
-		Category:     "Vulnerability Management",
-		Name:         "Homebrew Packages Outdated",
-		Description:  "Checks if installed Homebrew packages are severely outdated.",
-		Severity:     core.Low,
-		CurrentVal:   val,
-		ExpectedVal:  "Up to date",
-		CISBenchmark: "",
-		LogContext:   brewStr,
-		Passed:       passed,
-	})
 }
