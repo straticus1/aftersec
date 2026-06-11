@@ -34,6 +34,12 @@ jobs:
       - name: Build linux/arm64
         run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./cmd/aftersecd/... ./cmd/aftersec/... ./pkg/...
 
+      # Run tests natively on the linux runner — this exercises the Linux
+      # implementations (fanotify EDR sensor, /proc forensics, patchmgr)
+      # that the cross-compile steps above only prove compile.
+      - name: Test (linux, CGO_ENABLED=0)
+        run: CGO_ENABLED=0 go test ./cmd/aftersecd/... ./cmd/aftersec/... ./pkg/...
+
   darwin-vet:
     name: macOS vet (no CGO deps)
     runs-on: macos-latest
