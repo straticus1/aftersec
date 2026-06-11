@@ -52,3 +52,5 @@ aftersec-macos-release.tar.gz
 aftersec-installer.pkg
 *.pkg
 .worktrees/
+build/
+.omc/
