@@ -46,3 +46,155 @@ hardened. `pkg/threatintel` is green (5 passing tests locking in correct behavio
 - No `test.skip`, no stubs. Toolchain note from the audit: `go` is asdf-shimmed with
   no version set; use `/usr/local/bin/go` (satisfied the `go 1.25.7` directive).
 - Author commits Ryan Coleman, no AI attribution.
+
+---
+
+# Feature backlog — 15 new security features (designed 2026-07-12)
+
+Designs grounded in the existing architecture. Every feature follows the house
+rule: fail closed, never swallow data, negative tests required. Features **#8**
+and **#9** are the durable architectural fixes for defects #1 and #2 above —
+but the minimal hardening pass (backpressure + real token issuance) should land
+FIRST; these are the follow-on architecture, not a reason to wait.
+
+## Response & Containment
+
+1. **Host Network Quarantine.** Server-initiated containment: isolate an
+   endpoint while keeping the mTLS gRPC control channel alive for
+   un-quarantine + evidence streaming. macOS `pf` anchor rules, Linux
+   `nftables` priority-override table. New `pkg/response`, triggered over the
+   existing gRPC stream. Threats: active C2, ransomware spread, live exfil.
+   Fail-closed: if the control-channel allow-rule can't be verified after
+   applying the block set, keep the block set anyway.
+
+2. **Live Response Remote Triage.** Audited remote actions (kill process,
+   collect file, pull memory region, list persistence) reusing
+   `pkg/forensics` collectors. Per-command server-side RBAC; hash-logged
+   append-only audit table (PostgreSQL, RLS per-tenant); endpoint verifies a
+   server-signed action token before executing. Threats: IR at distance +
+   insider abuse of the feature itself. Fail-closed: unverifiable signature or
+   expired token → refuse and alert (the anti-pattern at
+   `darkscan/daemon_client.go:226` is the thing to never do here).
+
+3. **Ransomware Behavioral Shield with Canary Decoys.** Plant decoy files in
+   user dirs; any process touching a canary is suspended immediately (ES AUTH
+   verdict on macOS, SIGSTOP + fanotify permission events on Linux). Plus an
+   entropy/rename-burst detector on write events already flowing through
+   `pkg/edr`. Threats: mass-encryption ransomware, wipers. Fail-closed:
+   suspend first, ask the AI/operator second.
+
+## Prevention
+
+4. **Binary Authorization (Application Allowlisting).** Gate `AUTH_EXEC`
+   (macOS ES) / `fanotify FAN_OPEN_EXEC_PERM` (Linux) against
+   server-distributed policy: code-signing team ID / notarization on macOS,
+   package provenance + hash on Linux. Ships with a learn mode that builds the
+   allowlist from baseline. Reuses `pkg/forensics/codesign*`. Threats:
+   unsigned droppers, renamed LOLBins. Fail-closed: policy fetch failure →
+   enforce last signed cached policy; no policy ever seen → learn mode, never
+   silent-allow.
+
+5. **USB & Removable Media Control.** Block/allow/read-only policies for mass
+   storage: IOKit + DiskArbitration on macOS, udev + USBGuard-style
+   authorized-device list on Linux. Device events (VID/PID, serial, volume
+   hash) stream into the existing event pipeline. Threats: BadUSB, thumb-drive
+   exfil, rogue HID. Fail-closed: unknown device class under "block" policy →
+   deny mount and alert.
+
+6. **Egress DNS Threat Analytics.** DNS query capture with process
+   attribution (macOS: NEDNSProxy, unified-log fallback; Linux: eBPF kprobe /
+   dnstap). Detect DGA domains (local entropy + n-gram model, no cloud
+   dependency), newly-registered-domain lookups via `pkg/threatintel`,
+   punycode homoglyphs. Feeds the correlator (DGA hit + new persistence item =
+   high-severity composite). Threats: C2 beaconing, DNS tunneling.
+
+## Visibility
+
+7. **Process-Attributed Network Flow Sensor.** Per-connection telemetry
+   (proc, user, remote addr, bytes, duration): eBPF TC/kprobes on Linux,
+   `NEFilterDataProvider` on macOS. Flows land in the same gRPC event stream.
+   Biggest current visibility gap — ES client sees exec/file/fork but not the
+   network. Unlocks #6, #13, #14 and gives SWARM AI better per-event context.
+
+## Integrity & Self-Defense
+
+8. **Hash-Chained Durable Event Journal (store-and-forward).** THE REAL FIX
+   for defect #1 above. Replace the lossy in-memory `eventQueue` with an
+   append-only, size-capped local journal (SQLite WAL or flat segments), each
+   record chained `H(prev_hash ‖ event)`. `StreamAck.EventsProcessed` counts
+   only server-durably-committed events; client advances its journal cursor
+   only on ack. Server verifies chain continuity — a gap is itself a tamper
+   alert. Threats: telemetry loss during outages; attacker deleting evidence
+   between capture and upload. Fail-closed: journal full → backpressure the
+   sensor + local alarm; NEVER drop-and-ack. Makes
+   `TestStreamEvents_DoesNotAckDroppedEvents` green by architecture.
+
+9. **Hardware-Backed Attestation Enrollment.** THE REAL FIX for defect #2
+   above. Enrollment keypair in Secure Enclave (macOS) / TPM 2.0 (Linux); CSR
+   + platform attestation (SE key attestation / TPM quote incl. Secure Boot
+   PCRs) + org-scoped single-use enrollment code minted server-side. Server
+   verifies attestation, issues a short-lived client cert for the existing
+   mTLS channel + per-enrollment `crypto/rand` refresh token. Nothing static,
+   nothing unconditional. Threats: rogue-agent enrollment, credential cloning
+   (SE/TPM key can't leave hardware). Fail-closed: unverifiable attestation,
+   replayed code, or empty identity → reject with audit event.
+   `TestEnroll_RejectsUnidentifiedRequest` / `TestEnroll_DoesNotIssueStaticToken`
+   are the floor of this story.
+
+10. **Real-Time File Integrity Monitoring.** Continuous watch on critical
+    paths (`/etc`, launchd/systemd units, PAM, sudoers, agent's own
+    config) via ES notify (macOS) / fanotify (Linux) — distinct from the
+    point-in-time baseline/drift scan: catches the change as it happens with
+    the writing process attached. Before/after content capture for small
+    files. Threats: persistence installation, PAM backdoors, log tampering.
+
+11. **Agent Self-Protection & Tamper Detection.** ES AUTH denies unsigned
+    writes to `aftersecd` binaries/config/journal; detect `launchctl unload` /
+    `systemctl stop` and TCC/entitlement revocation attempts; lightweight
+    watchdog + SERVER-side "agent silenced" alert when heartbeats stop (server
+    infers tamper from silence — endpoint can't be trusted to report its own
+    death). Threats: competent malware kills the EDR first. Fail-closed: on
+    the server, missing heartbeat = incident, not "probably asleep." Should
+    precede shipping enforcement features attackers will want to disable.
+
+12. **Signed Detection-as-Code Rule Packs (Sigma support).** Rule engine in
+    the event pipeline consuming Sigma rules compiled to native matchers,
+    distributed as ed25519-signed versioned rule packs. Complements Starlark
+    plugins (Starlark = custom logic; Sigma = community detections by the
+    hundred). Threats: TTP detection gaps + supply-chain risk of the rule
+    channel itself. Fail-closed: bad signature or malformed pack → keep
+    previous pack + alert; never run unsigned rules, never silently run with
+    zero rules.
+
+## Fleet Intelligence
+
+13. **Exploit-Aware Vulnerability Prioritization.** Join installed-package
+    CVEs from `pkg/patchmgr` (OSV.dev), CISA KEV + EPSS feeds via
+    `pkg/threatintel`, and runtime observations from the ES client (vulnerable
+    binary actually executing? listening on a port? — via #7). Output: ranked
+    per-endpoint "fix this first" list; exploited-in-the-wild CVE in a
+    running, network-exposed process outranks a hundred dormant ones. Extends
+    the planned patchmgr remediation phases 2/3.
+
+14. **Fleet-Wide Lateral Movement Correlation.** Server-side (extends
+    `pkg/threatintel/correlator.go` + PostgreSQL): stitch cross-endpoint
+    sequences — SSH login on host B sourced from host A minutes after host A
+    alerted; same file hash on N hosts in an hour; credential-use fan-out.
+    Only the server sees the whole fleet. Threats: post-compromise spread,
+    which single-endpoint EDR is structurally blind to. Composite detections
+    feed SWARM AI with fleet context.
+
+15. **CIS Benchmark Compliance Packs with Signed Evidence Export.** Extend
+    `pkg/scanners` to full CIS Benchmark coverage (macOS + major Linux
+    distros), scored per-control, scheduled fleet-wide, with an auditor-facing
+    export: server-key-signed, timestamped evidence bundle mapping each
+    control to raw check output. SOC 2 / ISO 27001 evidence collection — fits
+    next to the Stripe billing tiers. Threats: config drift + evidence
+    tampering after collection (hence signing).
+
+## Suggested build order
+
+Foundation first: **#8, #9** (also clear the red tests above) → **#7**
+(network visibility unlocks #6, #13, #14) → **#11** (self-protection before
+enforcement features) → containment/prevention (**#1, #3, #4**) → fleet +
+compliance layer (**#13, #14, #15**) last.
