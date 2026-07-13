@@ -141,6 +141,12 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    Biggest current visibility gap — ES client sees exec/file/fork but not the
    network. Unlocks #6, #13, #14 and gives SWARM AI better per-event context.
 
+   **Status (2026-07-12): prerequisite enforcement hardening landed; sensor
+   remains unimplemented.** Linux fanotify and daemon `AUTH_EXEC` saturation
+   now deny rather than allow, and DarkScan/detonation errors deny in enterprise
+   enforcement mode. Process-attributed flow capture and DNS analytics are still
+   outstanding and are not claimed by this tranche.
+
 ## Integrity & Self-Defense
 
 8. **Hash-Chained Durable Event Journal (store-and-forward).** THE REAL FIX

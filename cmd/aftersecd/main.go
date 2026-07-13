@@ -48,7 +48,7 @@ func forensicsWorker(ctx context.Context, id int, mgr storage.Manager, queue <-c
 				if err != nil || scanCtx.Err() != nil {
 					return nil
 				}
-				
+
 				if info.IsDir() && filepath.Ext(path) == ".app" {
 					log.Printf("[Worker #%d] 🛡️ Validating Cryptographic Seal: %s", id, path)
 					res, _ := forensics.VerifyMacBundle(scanCtx, path)
@@ -106,12 +106,14 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 
 		shouldBlock, threatLevel, err := dsClient.RealTimeScan(ctx, event.ExecPath, 10)
 		if err != nil {
-			log.Printf("⚠️ [DARKSCAN] Scan error for %s: %v", event.ExecPath, err)
+			allow = false
+			log.Printf("🛑 [DARKSCAN] Scan error; blocked execution of %s: %v", event.ExecPath, err)
+			return
 		} else if shouldBlock {
 			allow = false
 			log.Printf("🛑 [DARKSCAN] Blocked execution: %s (Threat Level: %s)", event.ExecPath, threatLevel)
 			mgr.LogTelemetryEvent("darkscan", "blocked_execution", "critical", fmt.Sprintf(`{"path": "%s", "threat_level": "%s"}`, event.ExecPath, threatLevel))
-			
+
 			// Deploy local immunity
 			go func(path string) {
 				if err := plugins.GenerateImmunitySignature(path, "DarkScan Edge Conviction"); err != nil {
@@ -125,14 +127,14 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 		}
 	}
 
-	// Phase 2: Cloud Detonation Engine (Fallback)
-	// If missing server config or not in Enterprise mode, fail open
+	// Phase 2: Cloud Detonation Engine (enterprise enforcement only).
 	if cfg.Server == nil || cfg.Server.Address == "" || cfg.Mode != client.ModeEnterprise {
 		return
 	}
 
 	f, err := os.Open(event.ExecPath)
 	if err != nil {
+		allow = false
 		log.Printf("[AUTH_EXEC] Failed to read binary %s: %v", event.ExecPath, err)
 		return
 	}
@@ -141,6 +143,8 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 	urlStr := fmt.Sprintf("%s/api/v1/detonate", cfg.Server.Address)
 	req, err := http.NewRequest("POST", urlStr, f)
 	if err != nil {
+		allow = false
+		log.Printf("[AUTH_EXEC] Failed to construct detonation request for %s: %v", event.ExecPath, err)
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.Server.EnrollmentToken)
@@ -149,10 +153,16 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 	httpClient := &http.Client{Timeout: 45 * time.Second}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("⚠️ [DETONATION] Server unreachable, failing open for %s: %v", event.ExecPath, err)
+		allow = false
+		log.Printf("🛑 [DETONATION] Server unreachable; blocked execution of %s: %v", event.ExecPath, err)
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		allow = false
+		log.Printf("🛑 [DETONATION] Server returned %d; blocked execution of %s", resp.StatusCode, event.ExecPath)
+		return
+	}
 
 	var result struct {
 		Verdict string `json:"verdict"`
@@ -162,7 +172,7 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 		if result.Verdict == "DENY" {
 			allow = false
 			log.Printf("🛑 [DETONATION] SERVER BLOCKED EXECUTION: %s (Score: %d)", event.ExecPath, result.Score)
-			
+
 			// Deploy local immunity so we don't query the cloud for this exact structural family again
 			go func(path string, score int) {
 				reason := fmt.Sprintf("Cloud AI Detonation Conviction (Score: %d)", score)
@@ -173,6 +183,9 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 		} else {
 			log.Printf("✅ [DETONATION] Server Allowed Execution: %s", event.ExecPath)
 		}
+	} else {
+		allow = false
+		log.Printf("🛑 [DETONATION] Invalid verdict response; blocked execution of %s: %v", event.ExecPath, err)
 	}
 }
 
@@ -197,7 +210,7 @@ func main() {
 
 	home, _ := os.UserHomeDir()
 	configPath := filepath.Join(home, ".aftersec", "config.yaml")
-	
+
 	cfg, err := client.LoadConfig(configPath)
 	if err != nil {
 		log.Printf("Warning: failed to load config (%v), falling back to default standalone config", err)
@@ -285,7 +298,7 @@ func main() {
 			fmt.Printf("\033[33m[WARN]\033[0m DarkScan initialization failed: %v\n", err)
 		} else {
 			fmt.Printf("\033[32m[OK]\033[0m DarkScan Multi-Engine Protection Active (%d engines)\n", dsClient.GetEngineCount())
-			
+
 			// Start API Server if Enabled
 			if cfg.Daemon.DarkScan.APIEnabled {
 				go startDarkScanAPI(context.Background(), cfg, dsClient)
@@ -310,8 +323,8 @@ func main() {
 							handleAuthEvent(ev, esConsumer, cfg, mgr, dsClient)
 						}(event)
 					default:
-						log.Printf("🔥 [LOAD SHEDDING] AUTH_EXEC queue full, failing open for %s", event.ExecPath)
-						if err := esConsumer.RespondAuth(event, true, true); err != nil {
+						log.Printf("🛑 [LOAD SHEDDING] AUTH_EXEC queue full; blocking %s", event.ExecPath)
+						if err := esConsumer.RespondAuth(event, false, true); err != nil {
 							log.Printf("Failed to respond to AUTH_EXEC for %s: %v", event.ExecPath, err)
 						}
 					}
@@ -320,7 +333,7 @@ func main() {
 
 				b, _ := json.Marshal(event)
 				mgr.LogTelemetryEvent("endpoint_security", string(event.Type), "info", string(b))
-				
+
 				// Do not spam stdout for high-volume kernel bursts natively
 				if event.Type != edr.EventNotifyExec && event.Type != edr.EventNotifyExit {
 					log.Printf("📥 [ESF -> SQLite] Logged %s: %s (PID: %d)", event.Type, event.ExecPath, event.PID)

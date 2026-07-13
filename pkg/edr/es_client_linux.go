@@ -195,13 +195,19 @@ func (c *ESConsumer) dispatchFanotifyEvent(meta *unix.FanotifyEventMetadata) {
 	}:
 	default:
 		// Channel full: drop notify events; for auth events we must still respond
-		// to avoid blocking the kernel indefinitely.
+		// to avoid blocking the kernel indefinitely. Deny because the userspace
+		// authorization pipeline could not inspect the event.
 		if evType == EventAuthExec {
 			msg := (*fanotifyAuthMsg)(msgPtr)
 			buf := make([]byte, 8)
 			binary.NativeEndian.PutUint32(buf[0:4], uint32(msg.eventFd))
-			binary.NativeEndian.PutUint32(buf[4:8], unix.FAN_ALLOW)
-			unix.Write(c.fanotifyFd, buf) //nolint:errcheck
+			binary.NativeEndian.PutUint32(buf[4:8], unix.FAN_DENY)
+			if _, err := unix.Write(c.fanotifyFd, buf); err != nil {
+				// Closing the event fd remains fail-closed: the kernel cannot receive
+				// an allow verdict from this saturated authorization path.
+				_ = unix.Close(msg.eventFd)
+				return
+			}
 			unix.Close(msg.eventFd)
 		}
 	}
@@ -262,10 +268,10 @@ func nlSendProcSubscribe(fd int) error {
 	// nlmsg_flags, nlmsg_seq, nlmsg_pid = 0
 
 	off := unix.SizeofNlMsghdr
-	binary.NativeEndian.PutUint32(buf[off:off+4], cnIdxProc)          // cb_id.idx
-	binary.NativeEndian.PutUint32(buf[off+4:off+8], cnValProc)        // cb_id.val
+	binary.NativeEndian.PutUint32(buf[off:off+4], cnIdxProc)   // cb_id.idx
+	binary.NativeEndian.PutUint32(buf[off+4:off+8], cnValProc) // cb_id.val
 	// seq, ack = 0
-	binary.NativeEndian.PutUint16(buf[off+16:off+18], 4)              // len = sizeof(op)
+	binary.NativeEndian.PutUint16(buf[off+16:off+18], 4) // len = sizeof(op)
 	// flags = 0
 	binary.NativeEndian.PutUint32(buf[off+20:off+24], procCnMcastListen)
 
