@@ -117,16 +117,15 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager) {
 			}
 
 			if processedCount > 0 {
-				var idsToMark []int
-				for _, ev := range batch {
-					if id, ok := ev["id"].(int64); ok {
-						idsToMark = append(idsToMark, int(id))
-					}
+				idsToMark, ackErr := client.AcknowledgedTelemetryIDs(batch, processedCount)
+				if ackErr != nil {
+					log.Printf("Rejected invalid telemetry acknowledgment: %v", ackErr)
+					continue
 				}
 				if markErr := mgr.MarkTelemetrySynced(idsToMark); markErr != nil {
 					log.Printf("Failed to mark telemetry synced locally: %v", markErr)
 				} else {
-					log.Printf("✅ Automatically Synced %d telemetry events to Enterprise Upstream Server.", len(idsToMark))
+					log.Printf("✅ Automatically Synced %d telemetry events to Enterprise Upstream Server.", processedCount)
 				}
 			}
 		}

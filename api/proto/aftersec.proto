@@ -22,6 +22,12 @@ message EnrollRequest {
   string hostname = 2;
   string os_version = 3;
   string agent_version = 4;
+  string organization_id = 5;
+  string enrollment_code = 6;
+  string platform = 7;
+  bytes attestation_nonce = 8;
+  bytes attestation_quote = 9;
+  bytes public_key = 10;
 }
 
 message EnrollResponse {
@@ -29,6 +35,8 @@ message EnrollResponse {
   string access_token = 2;
   bool success = 3;
   string message = 4;
+  bytes client_certificate = 5;
+  int64 certificate_expires_at = 6;
 }
 
 message HeartbeatRequest {

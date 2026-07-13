@@ -47,7 +47,7 @@ func NewDaemonClient(cfg *Config, socketPath, tcpAddr string) (*DaemonClient, er
 		baseURL,
 		socketPath,
 		cfg.DaemonToken,
-		time.Minute,  // request timeout
+		time.Minute,   // request timeout
 		2*time.Second, // connect timeout
 	)
 	if err != nil {
@@ -216,15 +216,16 @@ func (d *DaemonClient) QuickScan(ctx context.Context, path string) (bool, error)
 	return result.Infected, nil
 }
 
-// RealTimeScan performs time-limited scan for EDR
+// Threats: RealTimeScan blocks execution when a file cannot be scanned, so a
+// daemon outage or timeout cannot become an EDR bypass. It does not protect
+// against a compromised daemon returning a forged clean result.
 func (d *DaemonClient) RealTimeScan(ctx context.Context, path string, timeoutSeconds int) (bool, ThreatLevel, error) {
 	scanCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
 	result, err := d.ScanFile(scanCtx, path)
 	if err != nil {
-		// Timeout or error - default to allow for fail-open security
-		return false, ThreatLevelNone, err
+		return true, ThreatLevelCritical, err
 	}
 
 	threatLevel := CalculateThreatLevel(result)
@@ -236,9 +237,9 @@ func (d *DaemonClient) RealTimeScan(ctx context.Context, path string, timeoutSec
 // convertScanResults converts DarkScan API results to AfterSec format
 func (d *DaemonClient) convertScanResults(path string, dsResults []*dsscanner.ScanResult) *ScanResult {
 	result := &ScanResult{
-		FilePath:  path,
-		Infected:  false,
-		Threats:   []Threat{},
+		FilePath:    path,
+		Infected:    false,
+		Threats:     []Threat{},
 		EnginesUsed: []string{},
 	}
 
@@ -384,7 +385,7 @@ func (d *DaemonClient) DetectSteganography(ctx context.Context, path string) (*S
 			Indicators:  []string{fmt.Sprintf("Severity: %s", ind.Severity)},
 		})
 	}
-	
+
 	for _, sig := range analysis.Signatures {
 		result.Techniques = append(result.Techniques, StegoTechnique{
 			Name:        sig.Tool,
@@ -452,16 +453,16 @@ func (d *DaemonClient) StoreResult(ctx context.Context, result *ScanResult) erro
 
 	// Reconstruct a store.HashCacheEntry
 	entry := store.HashCacheEntry{
-		Hash:      hash,
-		SHA256:    hash,
-		Infected:  result.Infected,
-		Threats:   "",
+		Hash:     hash,
+		SHA256:   hash,
+		Infected: result.Infected,
+		Threats:  "",
 	}
-	
+
 	if len(result.Threats) > 0 {
 		entry.Threats = result.Threats[0].Name
 	}
-	
+
 	return d.apiClient.UpdateHashCache(entry)
 }
 

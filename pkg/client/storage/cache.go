@@ -9,7 +9,7 @@ import (
 
 // CacheManager implements the Manager interface for enterprise mode caching
 type CacheManager struct {
-	local  *LocalManager
+	local  *SQLiteManager
 	server *client.ServerConfig
 }
 
@@ -19,7 +19,7 @@ func NewCacheManager(cfg *client.ClientConfig) (*CacheManager, error) {
 		return nil, fmt.Errorf("server config required for cache manager")
 	}
 
-	local, err := NewLocalManager(cfg.Storage.Path)
+	local, err := NewSQLiteManager(cfg.Storage.Path)
 	if err != nil {
 		return nil, fmt.Errorf("init local cache: %w", err)
 	}
@@ -28,6 +28,10 @@ func NewCacheManager(cfg *client.ClientConfig) (*CacheManager, error) {
 		local:  local,
 		server: cfg.Server,
 	}, nil
+}
+
+func (m *CacheManager) Close() error {
+	return m.local.Close()
 }
 
 func (m *CacheManager) SaveCommit(state *core.SecurityState) error {

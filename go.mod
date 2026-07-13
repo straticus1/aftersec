@@ -26,6 +26,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	fyne.io/systray v1.12.0 // indirect
 	github.com/BurntSushi/toml v1.5.0 // indirect
+	github.com/DATA-DOG/go-sqlmock v1.5.2 // indirect
 	github.com/alicebob/miniredis/v2 v2.38.0 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.23.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.5 // indirect

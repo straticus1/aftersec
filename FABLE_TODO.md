@@ -67,6 +67,12 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    Fail-closed: if the control-channel allow-rule can't be verified after
    applying the block set, keep the block set anyway.
 
+   **Status (2026-07-12): enforcement foundation implemented.** A fail-closed,
+   idempotent quarantine state machine plus macOS `pf` and Linux `nftables`
+   adapters retain containment when control-channel verification fails and
+   require explicit authorization for release. Live server token minting and
+   daemon command-loop startup wiring remain.
+
 2. **Live Response Remote Triage.** Audited remote actions (kill process,
    collect file, pull memory region, list persistence) reusing
    `pkg/forensics` collectors. Per-command server-side RBAC; hash-logged
@@ -76,12 +82,24 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    expired token → refuse and alert (the anti-pattern at
    `darkscan/daemon_client.go:226` is the thing to never do here).
 
+   **Status (2026-07-12): authorization and audit foundation implemented.**
+   Endpoint/action/tenant-bound Ed25519 tokens enforce expiry, replay denial,
+   action allowlists, and bounded output. The endpoint command processor accepts
+   only signed `REMOTE_ACTION` envelopes; audit records are hash-linked, and the
+   PostgreSQL schema is append-only with forced tenant RLS. Server-side RBAC
+   token minting and concrete bounded forensics runners remain.
+
 3. **Ransomware Behavioral Shield with Canary Decoys.** Plant decoy files in
    user dirs; any process touching a canary is suspended immediately (ES AUTH
    verdict on macOS, SIGSTOP + fanotify permission events on Linux). Plus an
    entropy/rename-burst detector on write events already flowing through
    `pkg/edr`. Threats: mass-encryption ransomware, wipers. Fail-closed:
    suspend first, ask the AI/operator second.
+
+   **Status (2026-07-12): detection/enforcement foundation implemented.**
+   Private CSPRNG-named decoys reject symlink directories; canary touches and
+   rename/entropy bursts synchronously suspend through `SIGSTOP` before evidence
+   recording. Endpoint Security/fanotify event-loop attachment remains.
 
 ## Prevention
 
@@ -93,6 +111,13 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    unsigned droppers, renamed LOLBins. Fail-closed: policy fetch failure →
    enforce last signed cached policy; no policy ever seen → learn mode, never
    silent-allow.
+
+   **Status (2026-07-12): policy engine implemented.** Ed25519-signed,
+   monotonically versioned policies reject tampering, expiry, rollback, invalid
+   identities, and corrupt caches. The cache installs atomically with private
+   permissions; no-policy state is explicit learn mode, while an expired last
+   policy denies. AUTH_EXEC/fanotify startup wiring and provenance collectors
+   remain.
 
 5. **USB & Removable Media Control.** Block/allow/read-only policies for mass
    storage: IOKit + DiskArbitration on macOS, udev + USBGuard-style
@@ -129,6 +154,13 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    sensor + local alarm; NEVER drop-and-ack. Makes
    `TestStreamEvents_DoesNotAckDroppedEvents` green by architecture.
 
+   **Status (2026-07-12): implemented.** Endpoint enterprise telemetry is
+   persisted in SQLite plus a verified SHA-256 hash-chained WAL journal;
+   tampering prevents reopen/sync, capacity fails closed, server acknowledgments
+   follow deterministic durable commits, and clients advance only the exact
+   acknowledged local prefix. Focused, race, integration, and full Go suites
+   pass.
+
 9. **Hardware-Backed Attestation Enrollment.** THE REAL FIX for defect #2
    above. Enrollment keypair in Secure Enclave (macOS) / TPM 2.0 (Linux); CSR
    + platform attestation (SE key attestation / TPM quote incl. Secure Boot
@@ -140,6 +172,15 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    replayed code, or empty identity → reject with audit event.
    `TestEnroll_RejectsUnidentifiedRequest` / `TestEnroll_DoesNotIssueStaticToken`
    are the floor of this story.
+
+   **Status (2026-07-12): platform-neutral enrollment plumbing implemented.**
+   Org-scoped expiring single-use codes, nonce-bound signed evidence, atomic
+   PostgreSQL consumption/audit, short-lived CA-issued client certificates,
+   CSPRNG refresh tokens, TLS 1.3 verification, Keychain/Linux-keyring credential
+   storage, replay denial, and a fully verified development path are wired and
+   tested. Native Secure Enclave attestation and Linux TPM 2.0 quote collection
+   remain platform/hardware adapter work; production fails closed without an
+   explicitly configured verifier and never falls back to software evidence.
 
 10. **Real-Time File Integrity Monitoring.** Continuous watch on critical
     paths (`/etc`, launchd/systemd units, PAM, sudoers, agent's own

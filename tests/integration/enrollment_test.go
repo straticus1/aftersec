@@ -2,11 +2,15 @@ package integration
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"net"
 	"testing"
 	"time"
 
 	grpcapi "aftersec/pkg/api/grpc"
+	"aftersec/pkg/attestation"
+	clientpkg "aftersec/pkg/client"
 	"aftersec/pkg/server/auth"
 	grpcserver "aftersec/pkg/server/grpc"
 	"aftersec/pkg/server/repository"
@@ -16,7 +20,7 @@ import (
 )
 
 func TestClientEnrollmentFlow(t *testing.T) {
-	// Setup generic repository (with nil DB for stubbed endpoints)
+	// Setup generic repository; enrollment dependencies are injected below.
 	repos := &repository.Repositories{
 		Organizations: repository.NewOrganizationRepository(nil),
 		Endpoints:     repository.NewEndpointRepository(nil),
@@ -35,6 +39,21 @@ func TestClientEnrollmentFlow(t *testing.T) {
 		grpc.StreamInterceptor(jwtManager.GRPCStreamInterceptor),
 	)
 	enterpriseSrv := grpcserver.NewServer(repos)
+	quotePublic, quotePrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate attestation key: %v", err)
+	}
+	issuer, caPEM, err := attestation.NewDevelopmentIssuer(time.Now, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("create development issuer: %v", err)
+	}
+	enrollment := attestation.NewEnrollmentService(
+		attestation.NewMemoryCodeStore(),
+		attestation.NewSignedQuoteVerifier(map[string]ed25519.PublicKey{"darwin": quotePublic}),
+		issuer,
+		time.Now,
+	)
+	enterpriseSrv.SetEnrollmentService(enrollment, 15*time.Minute)
 	grpcapi.RegisterEnterpriseServiceServer(s, enterpriseSrv)
 
 	go func() {
@@ -51,14 +70,22 @@ func TestClientEnrollmentFlow(t *testing.T) {
 	}
 	defer conn.Close()
 
-	client := grpcapi.NewEnterpriseServiceClient(conn)
+	rpc := grpcapi.NewEnterpriseServiceClient(conn)
 
-	// 1. Test Enrollment (No Auth Required for Enrollment per our rules)
-	enrollRes, err := client.Enroll(context.Background(), &grpcapi.EnrollRequest{
-		HardwareId:      "test-hw-id",
-		Hostname:        "test-hostname",
-		OsVersion:       "14.2",
-	})
+	code, err := enrollment.MintCode(context.Background(), "test-org", time.Minute)
+	if err != nil {
+		t.Fatalf("mint enrollment code: %v", err)
+	}
+	provider, err := clientpkg.NewDevelopmentEvidenceProvider("development", "darwin", quotePrivate)
+	if err != nil {
+		t.Fatalf("create evidence provider: %v", err)
+	}
+	details := clientpkg.EnrollmentDetails{
+		OrganizationID: "test-org", EnrollmentCode: code,
+		HardwareID: "test-hw-id", Hostname: "test-hostname", OSVersion: "14.2", AgentVersion: "test",
+	}
+	store := clientpkg.NewFileCredentialStore(t.TempDir(), "development")
+	enrollRes, err := clientpkg.RunAttestedEnrollment(context.Background(), rpc, provider, store, caPEM, details, time.Now())
 	if err != nil {
 		t.Fatalf("Enroll failed: %v", err)
 	}
@@ -69,7 +96,9 @@ func TestClientEnrollmentFlow(t *testing.T) {
 		t.Fatalf("Expected access token, got empty")
 	}
 
-	t.Logf("Successfully enrolled! Token: %s", enrollRes.AccessToken)
+	if _, err := clientpkg.RunAttestedEnrollment(context.Background(), rpc, provider, store, caPEM, details, time.Now()); err == nil {
+		t.Fatal("expected enrollment code replay to be rejected")
+	}
 
 	// Generate a valid JWT for subsequent requests
 	validToken, err := jwtManager.GenerateToken("test-user", "test-org", "agent")
@@ -81,7 +110,7 @@ func TestClientEnrollmentFlow(t *testing.T) {
 	md := metadata.Pairs("authorization", "Bearer "+validToken)
 	ctx := metadata.NewOutgoingContext(context.Background(), md)
 
-	hbRes, err := client.Heartbeat(ctx, &grpcapi.HeartbeatRequest{
+	hbRes, err := rpc.Heartbeat(ctx, &grpcapi.HeartbeatRequest{
 		TenantId:   "tenant-12345",
 		HardwareId: "test-hw-id",
 		Timestamp:  time.Now().Unix(),

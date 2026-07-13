@@ -10,14 +10,16 @@ import (
 	"time"
 
 	"aftersec/pkg/core"
+	"aftersec/pkg/eventjournal"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type SQLiteManager struct {
-	db      *sql.DB
-	baseDir string
-	mu      sync.RWMutex
+	db           *sql.DB
+	eventJournal *eventjournal.Journal
+	baseDir      string
+	mu           sync.RWMutex
 }
 
 func NewSQLiteManager(baseDir string) (*SQLiteManager, error) {
@@ -44,8 +46,15 @@ func NewSQLiteManager(baseDir string) (*SQLiteManager, error) {
 		return nil, err
 	}
 	if err := m.migrateLegacyJSON(); err != nil {
+		db.Close()
 		return nil, err
 	}
+	journal, err := eventjournal.Open(filepath.Join(baseDir, "telemetry-journal.db"), 1<<30)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open telemetry journal: %w", err)
+	}
+	m.eventJournal = journal
 	return m, nil
 }
 
@@ -67,13 +76,26 @@ func (m *SQLiteManager) initSchema() error {
 		event_type TEXT NOT NULL,
 		severity TEXT NOT NULL,
 		details JSON NOT NULL,
-		synced INTEGER DEFAULT 0
+		synced INTEGER DEFAULT 0,
+		journal_sequence INTEGER
 	);
 	`
 	_, err := m.db.Exec(schema)
 	// Inline migration wrapper
 	m.db.Exec("ALTER TABLE telemetry_events ADD COLUMN synced INTEGER DEFAULT 0")
+	m.db.Exec("ALTER TABLE telemetry_events ADD COLUMN journal_sequence INTEGER")
 	return err
+}
+
+func (m *SQLiteManager) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.eventJournal != nil {
+		if err := m.eventJournal.Close(); err != nil {
+			return err
+		}
+	}
+	return m.db.Close()
 }
 
 func (m *SQLiteManager) migrateLegacyJSON() error {
@@ -200,8 +222,23 @@ func (m *SQLiteManager) LogTelemetryEvent(source, eventType, severity, details s
 	if details == "" {
 		details = "{}"
 	}
-	_, err := m.db.Exec("INSERT INTO telemetry_events (timestamp, source, event_type, severity, details) VALUES (?, ?, ?, ?, ?)",
-		time.Now(), source, eventType, severity, details)
+	timestamp := time.Now().UTC()
+	payload, err := json.Marshal(struct {
+		Timestamp string `json:"timestamp"`
+		Source    string `json:"source"`
+		EventType string `json:"event_type"`
+		Severity  string `json:"severity"`
+		Details   string `json:"details"`
+	}{timestamp.Format(time.RFC3339Nano), source, eventType, severity, details})
+	if err != nil {
+		return fmt.Errorf("encode telemetry journal record: %w", err)
+	}
+	record, err := m.eventJournal.Append(payload)
+	if err != nil {
+		return fmt.Errorf("append telemetry journal: %w", err)
+	}
+	_, err = m.db.Exec("INSERT INTO telemetry_events (timestamp, source, event_type, severity, details, journal_sequence) VALUES (?, ?, ?, ?, ?, ?)",
+		timestamp, source, eventType, severity, details, record.Sequence)
 	return err
 }
 
@@ -270,17 +307,45 @@ func (m *SQLiteManager) MarkTelemetrySynced(ids []int) error {
 		return nil
 	}
 
-	query := "UPDATE telemetry_events SET synced = 1 WHERE id IN ("
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		if i > 0 {
-			query += ","
-		}
-		query += "?"
-		args[i] = id
+	rows, err := m.db.Query("SELECT id, journal_sequence FROM telemetry_events WHERE synced = 0 ORDER BY id LIMIT ?", len(ids))
+	if err != nil {
+		return err
 	}
-	query += ")"
+	var journalSequence int64
+	rowCount := 0
+	for rows.Next() {
+		var id int
+		var sequence sql.NullInt64
+		if err := rows.Scan(&id, &sequence); err != nil {
+			rows.Close()
+			return err
+		}
+		if rowCount >= len(ids) || id != ids[rowCount] || !sequence.Valid {
+			rows.Close()
+			return fmt.Errorf("telemetry acknowledgment is not a contiguous journal prefix")
+		}
+		journalSequence = sequence.Int64
+		rowCount++
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if rowCount != len(ids) {
+		return fmt.Errorf("telemetry acknowledgment contains missing local rows")
+	}
 
-	_, err := m.db.Exec(query, args...)
-	return err
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec("UPDATE telemetry_events SET synced = 1 WHERE id = ? AND synced = 0", id); err != nil {
+			return err
+		}
+	}
+	if err := m.eventJournal.Acknowledge(journalSequence); err != nil {
+		return fmt.Errorf("advance telemetry journal cursor: %w", err)
+	}
+	return tx.Commit()
 }

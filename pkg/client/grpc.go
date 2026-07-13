@@ -3,7 +3,9 @@ package client
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"time"
 
 	"google.golang.org/grpc"
@@ -12,6 +14,41 @@ import (
 
 	grpcapi "aftersec/pkg/api/grpc"
 )
+
+const clientTLSMinimumVersion = tls.VersionTLS13
+
+// buildClientTLSConfig constructs a verified TLS 1.3 configuration.
+// Threats: missing/untrusted roots, partial client identities, and certificate
+// hostname bypasses are rejected; verification is never disabled.
+func buildClientTLSConfig(cfg TLSConfig) (*tls.Config, error) {
+	if cfg.CA == "" {
+		return nil, fmt.Errorf("TLS CA bundle is required")
+	}
+	if (cfg.Cert == "") != (cfg.Key == "") {
+		return nil, fmt.Errorf("TLS client certificate and key must be configured together")
+	}
+	caPEM, err := os.ReadFile(cfg.CA)
+	if err != nil {
+		return nil, fmt.Errorf("read TLS CA bundle: %w", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("TLS CA bundle contains no valid certificates")
+	}
+	tlsConfig := &tls.Config{
+		MinVersion: clientTLSMinimumVersion,
+		RootCAs:    roots,
+		ServerName: cfg.ServerName,
+	}
+	if cfg.Cert != "" {
+		identity, err := tls.LoadX509KeyPair(cfg.Cert, cfg.Key)
+		if err != nil {
+			return nil, fmt.Errorf("load TLS client identity: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{identity}
+	}
+	return tlsConfig, nil
+}
 
 // EnterpriseClient is a wrapper around the generated gRPC client
 type EnterpriseClient struct {
@@ -27,10 +64,13 @@ func NewEnterpriseClient(cfg *ClientConfig) (*EnterpriseClient, error) {
 	}
 
 	opts := []grpc.DialOption{}
-	
-	if cfg.Server.TLS.Cert != "" || cfg.Server.TLS.CA != "" {
-		// In production, we would build a full mTLS config with a CA cert pool
-		creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) // Stubs for initial integration
+
+	if cfg.Server.TLS.Cert != "" || cfg.Server.TLS.Key != "" || cfg.Server.TLS.CA != "" {
+		tlsConfig, err := buildClientTLSConfig(cfg.Server.TLS)
+		if err != nil {
+			return nil, fmt.Errorf("configure management TLS: %w", err)
+		}
+		creds := credentials.NewTLS(tlsConfig)
 		opts = append(opts, grpc.WithTransportCredentials(creds))
 	} else {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -71,6 +111,10 @@ func (c *EnterpriseClient) Enroll(ctx context.Context, hwID, hostname, os string
 		AgentVersion: "1.0.0", // Hardcoded stub
 	}
 	return c.grpcClient.Enroll(ctx, req)
+}
+
+func (c *EnterpriseClient) EnrollAttested(ctx context.Context, provider EvidenceProvider, store CredentialStore, caPEM []byte, details EnrollmentDetails) (*grpcapi.EnrollResponse, error) {
+	return RunAttestedEnrollment(ctx, c.grpcClient, provider, store, caPEM, details, time.Now())
 }
 
 // Heartbeat pushes telemetry to the management server
@@ -118,7 +162,7 @@ func (c *EnterpriseClient) StreamTelemetryBatch(ctx context.Context, tenantID, h
 			EventType:  eventType,
 			Payload:    detailsRaw,
 		}
-		
+
 		if err := stream.Send(clientEv); err != nil {
 			return 0, err
 		}

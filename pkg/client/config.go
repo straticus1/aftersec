@@ -25,9 +25,10 @@ type StorageConfig struct {
 }
 
 type TLSConfig struct {
-	Cert string `yaml:"cert"`
-	Key  string `yaml:"key"`
-	CA   string `yaml:"ca"`
+	Cert       string `yaml:"cert"`
+	Key        string `yaml:"key"`
+	CA         string `yaml:"ca"`
+	ServerName string `yaml:"server_name"`
 }
 
 type ServerConfig struct {
@@ -74,11 +75,11 @@ type AIConfig struct {
 }
 
 type ThreatIntelConfig struct {
-	Enabled             bool     `yaml:"enabled"`
-	DarkAPIKey          string   `yaml:"darkapi_key"`
-	CheckCredentials    bool     `yaml:"check_credentials"`
-	CheckFileHashes     bool     `yaml:"check_file_hashes"`
-	CheckNetworkIOCs    bool     `yaml:"check_network_iocs"`
+	Enabled             bool                   `yaml:"enabled"`
+	DarkAPIKey          string                 `yaml:"darkapi_key"`
+	CheckCredentials    bool                   `yaml:"check_credentials"`
+	CheckFileHashes     bool                   `yaml:"check_file_hashes"`
+	CheckNetworkIOCs    bool                   `yaml:"check_network_iocs"`
 	MonitorDarkWeb      bool                   `yaml:"monitor_dark_web"`
 	DarkWebKeywords     []string               `yaml:"darkweb_keywords"`
 	OrganizationDomain  string                 `yaml:"organization_domain"`
@@ -89,10 +90,10 @@ type ThreatIntelConfig struct {
 type EndpointAIMode string
 
 const (
-	ModeObserving  EndpointAIMode = "observing"
-	ModeTraining   EndpointAIMode = "training"
-	ModeEnforcing  EndpointAIMode = "enforcing"
-	ModeDisabled   EndpointAIMode = "disabled"
+	ModeObserving EndpointAIMode = "observing"
+	ModeTraining  EndpointAIMode = "training"
+	ModeEnforcing EndpointAIMode = "enforcing"
+	ModeDisabled  EndpointAIMode = "disabled"
 )
 
 type EndpointAIConfig struct {
@@ -105,14 +106,14 @@ type EndpointAIConfig struct {
 }
 
 type DaemonConfig struct {
-	Scheduling   SchedulingConfig  `yaml:"scheduling"`
-	Resources    ResourceConfig    `yaml:"resources"`
-	Alerts       AlertConfig       `yaml:"alerts"`
-	Remediation  RemediationConfig `yaml:"remediation"`
-	AI           AIConfig          `yaml:"ai"`
-	EndpointAI   EndpointAIConfig  `yaml:"endpoint_ai"`
-	ThreatIntel  ThreatIntelConfig `yaml:"threat_intel"`
-	DarkScan     darkscan.Config   `yaml:"darkscan"`
+	Scheduling  SchedulingConfig  `yaml:"scheduling"`
+	Resources   ResourceConfig    `yaml:"resources"`
+	Alerts      AlertConfig       `yaml:"alerts"`
+	Remediation RemediationConfig `yaml:"remediation"`
+	AI          AIConfig          `yaml:"ai"`
+	EndpointAI  EndpointAIConfig  `yaml:"endpoint_ai"`
+	ThreatIntel ThreatIntelConfig `yaml:"threat_intel"`
+	DarkScan    darkscan.Config   `yaml:"darkscan"`
 }
 
 // ClientConfig represents the client-side configuration

@@ -6,9 +6,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	grpcapi "aftersec/pkg/api/grpc"
+	"aftersec/pkg/attestation"
 	"aftersec/pkg/darkscan"
 	"aftersec/pkg/server/api/rest"
 	"aftersec/pkg/server/auth"
@@ -36,7 +38,10 @@ func main() {
 	defer dbClient.Close()
 
 	if err := dbClient.RunMigrations("migrations/001_initial_schema.up.sql"); err != nil {
-		log.Printf("Warning: Migrations failed or already applied: %v", err)
+		log.Fatalf("Core database migration failed: %v", err)
+	}
+	if err := dbClient.RunMigrations("migrations/002_attested_enrollment.up.sql"); err != nil {
+		log.Fatalf("Attested enrollment migration failed: %v", err)
 	}
 
 	repos := repository.NewRepositories(dbClient.DB)
@@ -74,7 +79,23 @@ func main() {
 		log.Println("ClamAV definition updater disabled (set CLAMAV_UPDATER_ENABLED=true to enable)")
 	}
 
-	enterpriseSrv := grpcserver.NewServer(repos)
+	journalPath := os.Getenv("EVENT_JOURNAL_PATH")
+	if journalPath == "" {
+		journalPath = filepath.Join("data", "server-events.db")
+	}
+	if err := os.MkdirAll(filepath.Dir(journalPath), 0700); err != nil {
+		log.Fatalf("Failed to create event journal directory: %v", err)
+	}
+	enterpriseSrv, err := grpcserver.NewDurableServer(repos, journalPath, 1<<30)
+	if err != nil {
+		log.Fatalf("Failed to initialize durable event journal: %v", err)
+	}
+	defer enterpriseSrv.Close()
+	enrollmentRuntime, certificateTTL, err := attestation.BuildRuntimeFromEnvironment(os.Getenv, dbClient.DB)
+	if err != nil {
+		log.Fatalf("Failed to initialize attested enrollment: %v", err)
+	}
+	enterpriseSrv.SetEnrollmentService(enrollmentRuntime.Service, certificateTTL)
 
 	// Initialize DarkScan client
 	darkscanCfg := darkscan.DefaultConfig()
@@ -132,7 +153,7 @@ func main() {
 		grpc.UnaryInterceptor(jwtManager.GRPCUnaryInterceptor),
 		grpc.StreamInterceptor(jwtManager.GRPCStreamInterceptor),
 	)
-	
+
 	grpcapi.RegisterEnterpriseServiceServer(grpcServerInstance, enterpriseSrv)
 
 	log.Println("Listening for AfterSec gRPC Endpoints on :9090")

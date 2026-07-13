@@ -195,8 +195,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.mux.ServeHTTP(w, req)
 }
 
-// withRateLimit wraps a handler with per-IP rate limiting.
-// If limiter is nil (Redis not configured), the handler runs unrestricted.
+// Threats: withRateLimit denies protected requests when a configured limiter
+// cannot establish whether they are allowed. A nil limiter explicitly means
+// rate limiting was not configured; it does not protect those deployments.
 func (r *Router) withRateLimit(limiter *ratelimit.RedisRateLimiter, next http.HandlerFunc) http.HandlerFunc {
 	if limiter == nil {
 		return next
@@ -205,8 +206,7 @@ func (r *Router) withRateLimit(limiter *ratelimit.RedisRateLimiter, next http.Ha
 		ip, _, _ := splitHostPort(req.RemoteAddr)
 		allowed, err := limiter.TryConsume(req.Context(), ip)
 		if err != nil {
-			// Redis error — fail open so an outage doesn't block legitimate traffic
-			next(w, req)
+			http.Error(w, `{"error":"rate limiter unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
 		if !allowed {

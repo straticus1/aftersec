@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -183,15 +184,15 @@ type ThreatIOC struct {
 
 // DarkWebMention represents a mention on dark web forums/marketplaces
 type DarkWebMention struct {
-	ID          string    `json:"id"`
-	Source      string    `json:"source"` // forum, marketplace, paste, telegram
-	Title       string    `json:"title"`
-	Content     string    `json:"content"`
-	Author      string    `json:"author"`
-	Timestamp   time.Time `json:"timestamp"`
-	URL         string    `json:"url"`
-	Relevance   float64   `json:"relevance"` // 0.0-1.0
-	Keywords    []string  `json:"keywords"`
+	ID        string    `json:"id"`
+	Source    string    `json:"source"` // forum, marketplace, paste, telegram
+	Title     string    `json:"title"`
+	Content   string    `json:"content"`
+	Author    string    `json:"author"`
+	Timestamp time.Time `json:"timestamp"`
+	URL       string    `json:"url"`
+	Relevance float64   `json:"relevance"` // 0.0-1.0
+	Keywords  []string  `json:"keywords"`
 }
 
 // doRequestWithRetry executes an HTTP request with exponential backoff retry logic
@@ -311,9 +312,15 @@ func (c *DarkAPIClient) CheckDomainBreaches(ctx context.Context, domain string) 
 	return breaches, nil
 }
 
-// CheckIOC checks if a hash, IP, or domain is a known threat indicator
+// Threats: iocPath escapes untrusted IOC types and values so they cannot alter
+// the lookup route. It does not determine whether a value is valid for its type.
+func iocPath(iocType, value string) string {
+	return fmt.Sprintf("/ioc/%s/%s", url.PathEscape(iocType), url.PathEscape(value))
+}
+
+// CheckIOC checks if a hash, IP, or domain is a known threat indicator.
 func (c *DarkAPIClient) CheckIOC(ctx context.Context, iocType, value string) (*ThreatIOC, error) {
-	endpoint := fmt.Sprintf("%s/ioc/%s/%s", DarkAPIBaseURL, iocType, value)
+	endpoint := DarkAPIBaseURL + iocPath(iocType, value)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {

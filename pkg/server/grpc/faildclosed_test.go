@@ -14,12 +14,28 @@ package grpcserver
 // dispatched action itself.
 
 import (
+	"context"
+	"crypto/sha256"
 	"io"
+	"path/filepath"
 	"testing"
+	"time"
 
 	grpcapi "aftersec/pkg/api/grpc"
+	"aftersec/pkg/attestation"
+	"aftersec/pkg/eventjournal"
 	"google.golang.org/grpc"
 )
+
+type acceptAttestation struct{}
+
+func (acceptAttestation) Verify(context.Context, attestation.Evidence) error { return nil }
+
+type testCertificateIssuer struct{}
+
+func (testCertificateIssuer) IssueClientCertificate(context.Context, attestation.VerifiedIdentity) ([]byte, error) {
+	return []byte("client-certificate"), nil
+}
 
 // --- Area 1: command dispatch is fail-closed and does not lose queued data ---
 
@@ -135,6 +151,65 @@ func TestStreamEvents_DoesNotAckDroppedEvents(t *testing.T) {
 	}
 }
 
+func TestStreamEvents_AcknowledgesOnlyDurablyJournaledEvents(t *testing.T) {
+	journal, err := eventjournal.Open(filepath.Join(t.TempDir(), "server-events.db"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+
+	s := &Server{
+		eventJournal:  journal,
+		activeStreams: make(map[string]chan *grpcapi.ServerCommand),
+	}
+	stream := &mockStreamEventsServer{events: []*grpcapi.ClientEvent{
+		{HardwareId: "hw-1", EventType: "PROCESS_EXEC", Payload: `{"path":"/bin/sh"}`},
+		{HardwareId: "hw-1", EventType: "NETWORK_CONN", Payload: `{"remote":"192.0.2.1"}`},
+	}}
+
+	if err := s.StreamEvents(stream); err != nil {
+		t.Fatal(err)
+	}
+	if stream.ack == nil || stream.ack.EventsProcessed != 2 {
+		t.Fatalf("ack = %#v, want two durably committed events", stream.ack)
+	}
+	records, err := journal.Pending(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("journal contains %d records, want 2", len(records))
+	}
+}
+
+func TestStreamEvents_JournalFullDoesNotAcknowledgeEvent(t *testing.T) {
+	journal, err := eventjournal.Open(filepath.Join(t.TempDir(), "server-events.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+
+	s := &Server{
+		eventJournal:  journal,
+		activeStreams: make(map[string]chan *grpcapi.ServerCommand),
+	}
+	stream := &mockStreamEventsServer{events: []*grpcapi.ClientEvent{{HardwareId: "hw-1", EventType: "PROCESS_EXEC"}}}
+
+	if err := s.StreamEvents(stream); err != nil {
+		t.Fatal(err)
+	}
+	if stream.ack == nil || stream.ack.EventsProcessed != 0 {
+		t.Fatalf("ack = %#v, want zero events after journal failure", stream.ack)
+	}
+	records, err := journal.Pending(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("journal retained %d partial records", len(records))
+	}
+}
+
 // --- Area 2: enrollment must fail closed on an unidentified request ---
 
 // TestEnroll_RejectsUnidentifiedRequest proves that an enrollment request with
@@ -177,5 +252,46 @@ func TestEnroll_DoesNotIssueStaticToken(t *testing.T) {
 	}
 	if r1.AccessToken != "" && r1.AccessToken == r2.AccessToken {
 		t.Fatalf("STATIC TOKEN: Enroll returned identical access tokens across enrollments (%q); token is not CSPRNG-derived (server.go:75-83)", r1.AccessToken)
+	}
+}
+
+func TestEnroll_UsesAttestationServiceAndReturnsClientCertificate(t *testing.T) {
+	now := time.Unix(1000, 0)
+	service := attestation.NewEnrollmentService(
+		attestation.NewMemoryCodeStore(), acceptAttestation{}, testCertificateIssuer{}, func() time.Time { return now },
+	)
+	code, err := service.MintCode(context.Background(), "org-1", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(nil)
+	s.SetEnrollmentService(service, 15*time.Minute)
+	nonce := sha256.Sum256([]byte(code))
+	resp, err := s.Enroll(context.Background(), &grpcapi.EnrollRequest{
+		OrganizationId:   "org-1",
+		EnrollmentCode:   code,
+		HardwareId:       "hw-1",
+		Hostname:         "host-1",
+		Platform:         "darwin",
+		AttestationNonce: nonce[:],
+		AttestationQuote: []byte("quote"),
+		PublicKey:        []byte("public-key"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.TenantId != "org-1" || resp.AccessToken == "" || string(resp.ClientCertificate) != "client-certificate" {
+		t.Fatalf("unexpected enrollment response: %#v", resp)
+	}
+	if resp.CertificateExpiresAt <= time.Now().Unix() {
+		t.Fatalf("certificate expiry is not in the future: %d", resp.CertificateExpiresAt)
+	}
+}
+
+func TestEnroll_FailsClosedWithoutConfiguredAttestationService(t *testing.T) {
+	s := NewServer(nil)
+	_, err := s.Enroll(context.Background(), &grpcapi.EnrollRequest{HardwareId: "hw-1"})
+	if err == nil {
+		t.Fatal("enrollment succeeded without configured attestation service")
 	}
 }

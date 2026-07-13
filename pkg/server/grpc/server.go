@@ -6,20 +6,34 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	grpcapi "aftersec/pkg/api/grpc"
+	"aftersec/pkg/attestation"
+	"aftersec/pkg/eventjournal"
 	"aftersec/pkg/server/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type Server struct {
 	grpcapi.UnimplementedEnterpriseServiceServer
-	repos         *repository.Repositories
+	repos            *repository.Repositories
+	enrollment       *attestation.EnrollmentService
+	certificateTTL   time.Duration
+	eventJournal     *eventjournal.Journal
 	eventQueue       chan *grpcapi.ClientEvent
 	mu               sync.RWMutex
 	activeStreams    map[string]chan *grpcapi.ServerCommand
 	pendingSigmaRule string
+}
+
+func (s *Server) SetEnrollmentService(service *attestation.EnrollmentService, certificateTTL time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enrollment = service
+	s.certificateTTL = certificateTTL
 }
 
 func (s *Server) SetPendingSigmaRule(rule string) {
@@ -43,6 +57,26 @@ func NewServer(repos *repository.Repositories) *Server {
 	// Start the ML Evaluator consumer
 	go s.processMLBaselines()
 	return s
+}
+
+// NewDurableServer opens and verifies a persistent event journal before
+// accepting traffic. Startup fails closed if the journal is unavailable or its
+// hash chain has been altered.
+func NewDurableServer(repos *repository.Repositories, journalPath string, maxJournalBytes int64) (*Server, error) {
+	journal, err := eventjournal.Open(journalPath, maxJournalBytes)
+	if err != nil {
+		return nil, fmt.Errorf("open server event journal: %w", err)
+	}
+	s := NewServer(repos)
+	s.eventJournal = journal
+	return s, nil
+}
+
+func (s *Server) Close() error {
+	if s.eventJournal == nil {
+		return nil
+	}
+	return s.eventJournal.Close()
 }
 
 // DispatchCommand sends a command to a connected endpoint's active gRPC stream.
@@ -72,13 +106,42 @@ func (s *Server) processMLBaselines() {
 	}
 }
 
+// Threats: Enroll rejects anonymous, unprovisioned, replayed, or unattested
+// endpoints and returns credentials only after the configured trust service
+// succeeds. It does not select trust roots; startup configuration owns that.
 func (s *Server) Enroll(ctx context.Context, req *grpcapi.EnrollRequest) (*grpcapi.EnrollResponse, error) {
-	// Stub enrollment logic
+	if req == nil || req.HardwareId == "" {
+		return nil, status.Error(codes.InvalidArgument, "missing hardware_id")
+	}
+	s.mu.RLock()
+	service := s.enrollment
+	certificateTTL := s.certificateTTL
+	s.mu.RUnlock()
+	if service == nil || certificateTTL <= 0 {
+		return nil, status.Error(codes.FailedPrecondition, "attested enrollment is not configured")
+	}
+	result, err := service.Enroll(ctx, req.EnrollmentCode, attestation.Request{
+		OrganizationID: req.OrganizationId,
+		HardwareID:     req.HardwareId,
+		Hostname:       req.Hostname,
+		Evidence: attestation.Evidence{
+			HardwareID: req.HardwareId,
+			Platform:   req.Platform,
+			Nonce:      req.AttestationNonce,
+			Quote:      req.AttestationQuote,
+			PublicKey:  req.PublicKey,
+		},
+	})
+	if err != nil {
+		return nil, status.Error(codes.PermissionDenied, "attested enrollment rejected")
+	}
 	return &grpcapi.EnrollResponse{
-		TenantId:    "tenant-12345",
-		AccessToken: "stubbing_token_123",
-		Success:     true,
-		Message:     "Successfully enrolled endpoint",
+		TenantId:             req.OrganizationId,
+		AccessToken:          result.RefreshToken,
+		Success:              true,
+		Message:              "Successfully enrolled attested endpoint",
+		ClientCertificate:    result.ClientCertificate,
+		CertificateExpiresAt: time.Now().Add(certificateTTL).Unix(),
 	}, nil
 }
 
@@ -100,6 +163,9 @@ func (s *Server) Heartbeat(ctx context.Context, req *grpcapi.HeartbeatRequest) (
 	}, nil
 }
 
+// Threats: StreamEvents never acknowledges telemetry that was not durably
+// committed. Deployments configured with a journal survive process loss;
+// queue-only development deployments still refuse to acknowledge dropped data.
 func (s *Server) StreamEvents(stream grpcapi.EnterpriseService_StreamEventsServer) error {
 	var count int32
 	for {
@@ -112,13 +178,41 @@ func (s *Server) StreamEvents(stream grpcapi.EnterpriseService_StreamEventsServe
 			})
 		}
 
-		// Push event to an async Aggregation Queue (Redis/Kafka) for ML UEBA Evaluation
+		if s.eventJournal != nil {
+			payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
+			if err != nil {
+				return stream.SendAndClose(&grpcapi.StreamAck{
+					EventsProcessed: count,
+					Message:         "Event encoding failed; retry unacknowledged events",
+				})
+			}
+			if _, err := s.eventJournal.Append(payload); err != nil {
+				return stream.SendAndClose(&grpcapi.StreamAck{
+					EventsProcessed: count,
+					Message:         "Durable event journal unavailable; retry unacknowledged events",
+				})
+			}
+			count++
+			select {
+			case s.eventQueue <- event:
+			default:
+				// The event is already durable and can be replayed to processors.
+			}
+			continue
+		}
+
+		// Push the event to the async aggregation queue. If the queue is full,
+		// close the stream immediately and acknowledge only events already
+		// accepted, allowing the client to retry the unacknowledged remainder.
 		select {
 		case s.eventQueue <- event:
+			count++
 		default:
-			// Queue is full, drop event to prevent backpressure blocking
+			return stream.SendAndClose(&grpcapi.StreamAck{
+				EventsProcessed: count,
+				Message:         "Event queue full; retry unacknowledged events",
+			})
 		}
-		count++
 
 		// Periodically acknowledge to keep connection alive if needed, but for ClientStreaming we just collect
 	}
@@ -132,9 +226,9 @@ func (s *Server) ConnectCommandStream(stream grpcapi.EnterpriseService_ConnectCo
 	}
 
 	endpointID := msg.HardwareId
-	
+
 	cmdChan := make(chan *grpcapi.ServerCommand, 50)
-	
+
 	s.mu.Lock()
 	s.activeStreams[endpointID] = cmdChan
 	s.mu.Unlock()

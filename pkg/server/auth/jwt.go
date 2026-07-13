@@ -111,7 +111,7 @@ func (m *JWTManager) GRPCStreamInterceptor(srv interface{}, stream grpc.ServerSt
 
 func (m *JWTManager) authorizeGRPC(ctx context.Context, method string) error {
 	// Enroll uses an enrollment token enforced over mTLS — exempt only the exact method path
-	if method == "/aftersec.AfterSec/Enroll" {
+	if method == "/aftersec.api.EnterpriseService/Enroll" {
 		return nil
 	}
 	md, ok := metadata.FromIncomingContext(ctx)
