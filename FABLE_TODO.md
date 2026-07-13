@@ -133,6 +133,14 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    punycode homoglyphs. Feeds the correlator (DGA hit + new persistence item =
    high-severity composite). Threats: C2 beaconing, DNS tunneling.
 
+   **Status (2026-07-12): analytics foundation implemented.** Strict IDNA/DNS
+   normalization rejects malformed and oversized names; every query requires
+   PID/process attribution. Local entropy-based DGA scoring, punycode/homoglyph
+   alerts, and optional threat-intelligence matches produce bounded results,
+   while enrichment outages never suppress local detections. Native macOS/Linux
+   DNS capture, durable event wiring, trained n-gram scoring, and
+   DGA-plus-persistence correlation remain.
+
 ## Visibility
 
 7. **Process-Attributed Network Flow Sensor.** Per-connection telemetry
