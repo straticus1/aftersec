@@ -19,6 +19,16 @@ var (
 	ErrMissingAuth  = errors.New("missing authorization header")
 )
 
+type claimsContextKey struct{}
+
+// ClaimsFromContext returns only claims installed by HTTPMiddleware after full
+// token validation. Threats: handlers must never trust role/org data supplied
+// directly in request bodies or headers.
+func ClaimsFromContext(ctx context.Context) (*AfterSecClaims, bool) {
+	claims, ok := ctx.Value(claimsContextKey{}).(*AfterSecClaims)
+	return claims, ok && claims != nil
+}
+
 type AfterSecClaims struct {
 	UserID         string `json:"uid"`
 	OrganizationID string `json:"org"`
@@ -86,12 +96,12 @@ func (m *JWTManager) HTTPMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, ErrInvalidToken.Error(), http.StatusUnauthorized)
 			return
 		}
-		_, err := m.ValidateToken(parts[1])
+		claims, err := m.ValidateToken(parts[1])
 		if err != nil {
 			http.Error(w, ErrInvalidToken.Error(), http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), claimsContextKey{}, claims)))
 	}
 }
 

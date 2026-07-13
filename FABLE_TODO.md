@@ -87,7 +87,10 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    action allowlists, and bounded output. The endpoint command processor accepts
    only signed `REMOTE_ACTION` envelopes; audit records are hash-linked, and the
    PostgreSQL schema is append-only with forced tenant RLS. Server-side RBAC
-   token minting and concrete bounded forensics runners remain.
+   now propagates only validated JWT claims and mints short-lived Ed25519 action
+   tokens after explicit role/action authorization and endpoint tenant-ownership
+   verification. REST dispatch injection and concrete bounded forensics runners
+   remain.
 
 3. **Ransomware Behavioral Shield with Canary Decoys.** Plant decoy files in
    user dirs; any process touching a canary is suspended immediately (ES AUTH
