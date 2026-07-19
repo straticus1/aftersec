@@ -14,6 +14,7 @@ const (
 	EventNotifyCreate EventType = "notify_create"
 	EventNotifyExit   EventType = "notify_exit"
 	EventNotifyMount  EventType = "notify_mount"
+	EventNotifyWrite  EventType = "notify_write"
 )
 
 // ProcessEvent holds normalized telemetry for a process/filesystem event

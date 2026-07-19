@@ -23,6 +23,8 @@ type ESConsumer struct {
 	events chan<- ProcessEvent
 }
 
+func NotifyWriteEventCode() uint32 { return uint32(C.ES_EVENT_TYPE_NOTIFY_WRITE) }
+
 // globalConsumer is required because CGO callbacks cannot carry Go context cleanly
 var globalConsumer *ESConsumer
 
@@ -32,7 +34,7 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 		return
 	}
 
-	// This is a simplified event handler. 
+	// This is a simplified event handler.
 	// In a full implementation, we'd cast msg.event and parse es_event_exec_t, etc.
 	// For now, we emit basic raw events to prove the architecture.
 	eventType := EventNotifyCreate
@@ -46,6 +48,8 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 		eventType = EventNotifyExit
 	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_MOUNT { // DMG/ISO Interception
 		eventType = EventNotifyMount
+	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_WRITE {
+		eventType = EventNotifyWrite
 	}
 
 	var execPath string
@@ -54,7 +58,7 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 	pid := int(C.get_pid(msg))
 	ppid := int(C.get_ppid(msg))
 	uid := uint32(C.get_uid(msg))
-	
+
 	var length C.int
 	cPath := C.get_executable_path(msg, &length)
 	if length > 0 {
@@ -66,6 +70,13 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 	mPath := C.get_mount_path(msg, &mLen)
 	if mLen > 0 {
 		mountPath = C.GoStringN(mPath, mLen)
+	}
+	if eventType == EventNotifyWrite {
+		var tLen C.int
+		tPath := C.get_target_path(msg, &tLen)
+		if tLen > 0 {
+			execPath = C.GoStringN(tPath, tLen)
+		}
 	}
 
 	globalConsumer.events <- ProcessEvent{
@@ -106,11 +117,11 @@ func (c *ESConsumer) Subscribe(events []uint32) error {
 	if c.client == nil {
 		return errors.New("es client not initialized")
 	}
-	
+
 	if len(events) == 0 {
 		return nil
 	}
-	
+
 	// Convert Go uint32 slice to C.es_event_type_t array
 	cEvents := make([]C.es_event_type_t, len(events))
 	for i, e := range events {

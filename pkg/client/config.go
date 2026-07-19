@@ -32,9 +32,10 @@ type TLSConfig struct {
 }
 
 type ServerConfig struct {
-	Address         string    `yaml:"address"`
-	TLS             TLSConfig `yaml:"tls"`
-	EnrollmentToken string    `yaml:"enrollment_token"`
+	Address               string    `yaml:"address"`
+	TLS                   TLSConfig `yaml:"tls"`
+	EnrollmentToken       string    `yaml:"enrollment_token"`
+	ActionVerificationKey string    `yaml:"action_verification_key"`
 }
 
 type SchedulingConfig struct {

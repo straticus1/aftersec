@@ -17,6 +17,8 @@ const (
 	ActionCollectFile     Action = "collect_file"
 	ActionReadMemory      Action = "read_memory"
 	ActionListPersistence Action = "list_persistence"
+	ActionQuarantine      Action = "quarantine"
+	ActionReleaseQuarantine Action = "release_quarantine"
 )
 
 type ActionClaims struct {
@@ -25,6 +27,7 @@ type ActionClaims struct {
 	EndpointID string    `json:"endpoint_id"`
 	Action     Action    `json:"action"`
 	ExpiresAt  time.Time `json:"expires_at"`
+	Arguments  map[string]string `json:"arguments,omitempty"`
 }
 type signedAction struct {
 	Claims    json.RawMessage `json:"claims"`
@@ -93,7 +96,9 @@ func (e *ActionExecutor) Execute(ctx context.Context, token string, args map[str
 	}
 	e.used[c.ID] = struct{}{}
 	e.mu.Unlock()
-	out, err := e.runner.Run(ctx, c.Action, args)
+	// Arguments are part of the signed claims. Never accept mutable arguments
+	// supplied by the command transport after signature verification.
+	out, err := e.runner.Run(ctx, c.Action, cloneArguments(c.Arguments))
 	if err != nil {
 		return nil, fmt.Errorf("execute remote action: %w", err)
 	}
@@ -107,8 +112,24 @@ func validClaims(c ActionClaims) bool {
 		return false
 	}
 	switch c.Action {
-	case ActionKillProcess, ActionCollectFile, ActionReadMemory, ActionListPersistence:
+	case ActionKillProcess, ActionCollectFile, ActionReadMemory, ActionListPersistence, ActionQuarantine, ActionReleaseQuarantine:
+		if len(c.Arguments) > 16 {
+			return false
+		}
+		for key, value := range c.Arguments {
+			if key == "" || len(key) > 64 || len(value) > 4096 {
+				return false
+			}
+		}
 		return true
 	}
 	return false
+}
+
+func cloneArguments(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }

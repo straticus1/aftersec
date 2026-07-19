@@ -50,6 +50,15 @@ const char* get_mount_path(const es_message_t *msg, int *out_len) {
     return path;
 }
 
+const char* get_target_path(const es_message_t *msg, int *out_len) {
+    if (!msg || !msg->event.write.target) {
+        *out_len = 0;
+        return "";
+    }
+    *out_len = (int)msg->event.write.target->path.length;
+    return msg->event.write.target->path.data;
+}
+
 void retain_message_safe(const es_message_t *msg) {
     if (!msg) return;
 

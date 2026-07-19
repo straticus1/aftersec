@@ -7,6 +7,7 @@ import (
 	"aftersec/pkg/client/storage"
 	"aftersec/pkg/darkscan"
 	"aftersec/pkg/edr"
+	"aftersec/pkg/fim"
 	"aftersec/pkg/forensics"
 	"aftersec/pkg/plugins"
 	"aftersec/pkg/tuning"
@@ -202,7 +203,7 @@ func main() {
 	} else {
 		// 0=AUTH_EXEC, 24=NOTIFY_EXEC, 26=NOTIFY_EXIT, 123=NOTIFY_MOUNT
 		fmt.Printf("\033[32m[OK]\033[0m Endpoint Security Framework Driver Active. Subscribed: AUTH_EXEC, NOTIFY_EXEC, NOTIFY_EXIT...\n")
-		err = esConsumer.Subscribe([]uint32{0, 24, 26, 123})
+		err = esConsumer.Subscribe([]uint32{0, 24, 26, 123, edr.NotifyWriteEventCode()})
 		if err != nil {
 			log.Printf("Failed to subscribe to ES events: %v", err)
 		}
@@ -312,6 +313,7 @@ func main() {
 	}
 
 	// Process ESF events and stream into SQLite
+	fimMonitor := fim.NewMonitor([]string{"/etc", "/Library/LaunchDaemons", "/Library/LaunchAgents"}, 1<<20)
 	if esConsumer != nil {
 		go func() {
 			for event := range edrEvents {
@@ -333,6 +335,13 @@ func main() {
 
 				b, _ := json.Marshal(event)
 				mgr.LogTelemetryEvent("endpoint_security", string(event.Type), "info", string(b))
+				if event.Type == edr.EventNotifyWrite {
+					if err := fimMonitor.ValidateEvent(fim.Event{Path: event.ExecPath, WriterPID: event.PID}); err != nil {
+						log.Printf("🛑 [FIM] rejected write event for %s: %v", event.ExecPath, err)
+						continue
+					}
+					mgr.LogTelemetryEvent("file_integrity", "critical_path_write", "high", string(b))
+				}
 
 				// Do not spam stdout for high-volume kernel bursts natively
 				if event.Type != edr.EventNotifyExec && event.Type != edr.EventNotifyExit {

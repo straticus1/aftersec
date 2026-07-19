@@ -15,6 +15,7 @@ type EndpointOwnerLookup interface {
 type MintRequest struct {
 	Role, TenantID, EndpointID string
 	Action                     Action
+	Arguments                  map[string]string
 }
 type ActionMinter struct {
 	key    ed25519.PrivateKey
@@ -44,14 +45,14 @@ func (m *ActionMinter) Mint(ctx context.Context, r MintRequest) (string, error) 
 	if _, err = rand.Read(id[:]); err != nil {
 		return "", fmt.Errorf("generate command ID: %w", err)
 	}
-	return SignActionToken(m.key, ActionClaims{ID: hex.EncodeToString(id[:]), TenantID: r.TenantID, EndpointID: r.EndpointID, Action: r.Action, ExpiresAt: m.now().Add(m.ttl)})
+	return SignActionToken(m.key, ActionClaims{ID: hex.EncodeToString(id[:]), TenantID: r.TenantID, EndpointID: r.EndpointID, Action: r.Action, ExpiresAt: m.now().Add(m.ttl), Arguments: cloneArguments(r.Arguments)})
 }
 func roleAllows(role string, a Action) bool {
 	switch role {
 	case "admin":
-		return a == ActionKillProcess || a == ActionCollectFile || a == ActionReadMemory || a == ActionListPersistence
+		return a == ActionKillProcess || a == ActionCollectFile || a == ActionReadMemory || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine
 	case "security_operator":
-		return a == ActionKillProcess || a == ActionCollectFile || a == ActionListPersistence
+		return a == ActionKillProcess || a == ActionCollectFile || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine
 	}
 	return false
 }

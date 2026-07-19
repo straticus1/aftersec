@@ -2,6 +2,7 @@ package modes
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"aftersec/pkg/client"
 	"aftersec/pkg/client/storage"
 	"aftersec/pkg/forensics"
+	"aftersec/pkg/response"
 	"aftersec/pkg/scanners"
 	"aftersec/pkg/telemetry"
 )
@@ -27,6 +29,32 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager) {
 		log.Fatalf("Failed to initialize enterprise client: %v", err)
 	}
 	defer grpcClient.Close()
+
+	// The command channel is enabled only with an explicitly provisioned
+	// Ed25519 verification key. Missing or malformed key material fails closed;
+	// the daemon never accepts unsigned control actions.
+	if cfg.Server.ActionVerificationKey != "" {
+		keyBytes, keyErr := os.ReadFile(cfg.Server.ActionVerificationKey)
+		if keyErr != nil || len(keyBytes) != ed25519.PublicKeySize {
+			log.Printf("remote command channel disabled: action verification key is unavailable or invalid")
+		} else {
+			quarantine := response.NewQuarantineManager(response.NewPlatformFirewall())
+			runner := response.NewSystemActionRunner(quarantine, 1<<20)
+			executor := response.NewActionExecutor(ed25519.PublicKey(keyBytes), cfg.TenantID, "HW-"+hostnameOrUnknown(), runner, 1<<20, time.Now)
+			processor := client.NewCommandProcessor(cfg.TenantID, "HW-"+hostnameOrUnknown(), executor, 1<<20)
+			go func() {
+				streamCtx := context.Background()
+				stream, streamErr := grpcClient.ConnectCommandStream(streamCtx)
+				if streamErr != nil {
+					log.Printf("remote command stream unavailable; commands remain disabled: %v", streamErr)
+					return
+				}
+				if streamErr = client.RunCommandLoop(streamCtx, stream, processor); streamErr != nil {
+					log.Printf("remote command stream stopped: %v", streamErr)
+				}
+			}()
+		}
+	}
 
 	if cfg.TenantID == "" {
 		log.Fatalf("Tenant ID is not configured. Please run 'aftersec enroll' first.")
@@ -143,4 +171,12 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager) {
 			return
 		}
 	}
+}
+
+func hostnameOrUnknown() string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		return "unknown"
+	}
+	return hostname
 }

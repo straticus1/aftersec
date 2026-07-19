@@ -43,6 +43,8 @@ type ESConsumer struct {
 	authMode   bool // true when FAN_CLASS_CONTENT succeeded (blocking exec interception available)
 }
 
+func NotifyWriteEventCode() uint32 { return 0 }
+
 // NewESConsumer creates a fanotify-backed sensor.
 // Tries FAN_CLASS_CONTENT (blocking, requires CAP_SYS_ADMIN) first; falls back to
 // FAN_CLASS_NOTIF (notify-only) if denied.

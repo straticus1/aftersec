@@ -8,10 +8,14 @@ import (
 	"time"
 )
 
-type actionRunner struct{ calls int }
+type actionRunner struct {
+	calls int
+	args  map[string]string
+}
 
-func (r *actionRunner) Run(_ context.Context, action Action, _ map[string]string) ([]byte, error) {
+func (r *actionRunner) Run(_ context.Context, action Action, args map[string]string) ([]byte, error) {
 	r.calls++
+	r.args = args
 	return []byte(action), nil
 }
 
@@ -37,6 +41,27 @@ func TestRemoteActionRejectsWrongEndpointAndReplay(t *testing.T) {
 	}
 	if _, err := exec.Execute(context.Background(), token, nil); err == nil {
 		t.Fatal("expected replay denial")
+	}
+}
+
+func TestRemoteActionUsesOnlySignedArguments(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	now := time.Now()
+	token, err := SignActionToken(priv, ActionClaims{
+		ID: "signed-args", TenantID: "tenant", EndpointID: "endpoint",
+		Action: ActionKillProcess, ExpiresAt: now.Add(time.Minute),
+		Arguments: map[string]string{"pid": "42"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &actionRunner{}
+	exec := NewActionExecutor(pub, "tenant", "endpoint", runner, 1024, func() time.Time { return now })
+	if _, err := exec.Execute(context.Background(), token, map[string]string{"pid": "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if runner.args["pid"] != "42" {
+		t.Fatalf("runner args = %v; unsigned caller arguments were accepted", runner.args)
 	}
 }
 
