@@ -14,18 +14,19 @@ import (
 const maxProviderFrameBytes = 16 * 1024
 
 type providerEvent struct {
-	Kind          string `json:"kind"`
-	PID           int    `json:"pid"`
-	Process       string `json:"process"`
-	UID           uint32 `json:"uid"`
-	LocalAddress  string `json:"localAddress"`
-	LocalPort     uint16 `json:"localPort"`
-	RemoteAddress string `json:"remoteAddress"`
-	RemotePort    uint16 `json:"remotePort"`
-	Protocol      string `json:"protocolName"`
-	BytesSent     uint64 `json:"bytesSent"`
-	BytesReceived uint64 `json:"bytesReceived"`
-	Timestamp     int64  `json:"timestamp"`
+	Kind             string `json:"kind"`
+	PID              int    `json:"pid"`
+	Process          string `json:"process"`
+	UID              uint32 `json:"uid"`
+	LocalAddress     string `json:"localAddress"`
+	LocalPort        uint16 `json:"localPort"`
+	RemoteAddress    string `json:"remoteAddress"`
+	RemotePort       uint16 `json:"remotePort"`
+	Protocol         string `json:"protocolName"`
+	BytesSent        uint64 `json:"bytesSent"`
+	BytesReceived    uint64 `json:"bytesReceived"`
+	Timestamp        int64  `json:"timestamp"`
+	StartedTimestamp int64  `json:"startedTimestamp"`
 }
 
 type JSONLBackend struct {
@@ -77,6 +78,10 @@ func (b *JSONLBackend) Run(ctx context.Context, emit func(Flow) error) error {
 				return ErrInvalidFlow
 			}
 			at := time.Unix(event.Timestamp, 0)
+			started := at
+			if event.StartedTimestamp > 0 && event.StartedTimestamp <= event.Timestamp {
+				started = time.Unix(event.StartedTimestamp, 0)
+			}
 			if err := emit(Flow{
 				ProcessID:     event.PID,
 				ProcessName:   event.Process,
@@ -88,7 +93,7 @@ func (b *JSONLBackend) Run(ctx context.Context, emit func(Flow) error) error {
 				Protocol:      event.Protocol,
 				BytesSent:     event.BytesSent,
 				BytesReceived: event.BytesReceived,
-				StartedAt:     at,
+				StartedAt:     started,
 				EndedAt:       at,
 				Attribution:   AttributionExact,
 			}); err != nil {

@@ -19,10 +19,12 @@ import (
 const linuxDNSDomainBytes = 254
 
 type linuxDNSEvent struct {
-	PID     uint32
-	UID     uint32
-	Process [16]byte
-	Domain  [linuxDNSDomainBytes]byte
+	PID      uint32
+	UID      uint32
+	Protocol uint8
+	_        [3]byte
+	Process  [16]byte
+	Domain   [linuxDNSDomainBytes]byte
 }
 
 type linuxEBPFDNSSource struct {
@@ -58,15 +60,29 @@ func (s *linuxEBPFDNSSource) Watch(ctx context.Context, emit func(Query) error) 
 	}
 	defer collection.Close()
 	events := collection.Maps["events"]
-	program := collection.Programs["trace_udp_sendmsg"]
-	if events == nil || program == nil {
+	if events == nil {
 		return fmt.Errorf("DNS eBPF object is missing required map or program")
 	}
-	probe, err := link.Kprobe("udp_sendmsg", program, nil)
-	if err != nil {
-		return fmt.Errorf("attach udp_sendmsg DNS probe: %w", err)
+	var probes []link.Link
+	defer func() {
+		for _, probe := range probes {
+			_ = probe.Close()
+		}
+	}()
+	for _, item := range []struct{ program, symbol string }{
+		{"trace_udp_sendmsg", "udp_sendmsg"},
+		{"trace_tcp_sendmsg", "tcp_sendmsg"},
+	} {
+		program := collection.Programs[item.program]
+		if program == nil {
+			return fmt.Errorf("DNS eBPF object is missing %s", item.program)
+		}
+		probe, attachErr := link.Kprobe(item.symbol, program, nil)
+		if attachErr != nil {
+			return fmt.Errorf("attach %s DNS probe: %w", item.symbol, attachErr)
+		}
+		probes = append(probes, probe)
 	}
-	defer probe.Close()
 	reader, err := ringbuf.NewReader(events)
 	if err != nil {
 		return fmt.Errorf("open DNS event ring: %w", err)
@@ -89,9 +105,10 @@ func (s *linuxEBPFDNSSource) Watch(ctx context.Context, emit func(Query) error) 
 			return fmt.Errorf("decode DNS eBPF event: %w", err)
 		}
 		query := Query{
-			PID:     int(event.PID),
-			Process: cString(event.Process[:]),
-			Domain:  cString(event.Domain[:]),
+			PID:      int(event.PID),
+			Process:  cString(event.Process[:]),
+			Domain:   cString(event.Domain[:]),
+			Protocol: map[uint8]string{6: "tcp", 17: "udp"}[event.Protocol],
 		}
 		if err := emit(query); err != nil {
 			return err

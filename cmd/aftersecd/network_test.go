@@ -42,6 +42,30 @@ func TestPersistNetworkFlowsStoresNormalizedTelemetry(t *testing.T) {
 	}
 }
 
+func TestKnownDoHConnectionIsClassified(t *testing.T) {
+	flow := attributedFlow()
+	flow.RemoteAddress = "1.1.1.1"
+	flow.RemotePort = 443
+	if !isKnownDoHConnection(flow) {
+		t.Fatal("expected known encrypted DNS resolver connection")
+	}
+}
+
+func TestPersistNetworkFlowsRecordsKnownDoHObservation(t *testing.T) {
+	flow := attributedFlow()
+	flow.RemoteAddress = "1.1.1.1"
+	flows := make(chan netsensor.Flow, 1)
+	flows <- flow
+	close(flows)
+	logger := &flowLogger{}
+	if err := persistNetworkFlows(context.Background(), flows, logger); err != nil {
+		t.Fatal(err)
+	}
+	if logger.count != 2 {
+		t.Fatalf("stored %d events, want flow and DoH observation", logger.count)
+	}
+}
+
 func TestPersistNetworkFlowsSurfacesStorageFailure(t *testing.T) {
 	flows := make(chan netsensor.Flow, 1)
 	flows <- attributedFlow()

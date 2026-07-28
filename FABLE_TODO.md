@@ -23,8 +23,9 @@ This pass also completed the endpoint integration tranche:
   PID/UID attribution, app identity, endpoints, and protocol; a permission-
   checked bounded JSONL backend feeds validated flows into daemon telemetry.
   Sink/write/persistence failures stop a required sensor. Linux now loads a
-  process-attributed CO-RE TCP backend. Remaining: signed extension/BPF object
-  packaging and UDP byte/duration coverage.
+  process-attributed CO-RE TCP/UDP backend. Both native backends report
+  cumulative UDP sent/received bytes and flow duration. Remaining: signed
+  extension/BPF object packaging.
 - **#11 Self-Protection:** server heartbeats now feed the silence tracker;
   clock-skewed heartbeats are rejected and missed deadlines create durable,
   tenant-isolated `agent_silence_incidents`. ES authorization and Linux BPF-LSM
@@ -40,9 +41,8 @@ This pass also completed the endpoint integration tranche:
 - **#3:** add native rename-event counters to the attached canary shield.
 - **#4:** complete; server-side policy distribution remains a fleet enhancement.
 - **#5:** complete core discovery/wiring; add mount-race integration tests.
-- **#6:** add TCP/DoH capture, trained n-gram scoring, and NRD enrichment.
-- **#7:** package/sign the extensions and BPF objects; add UDP and byte/duration
-  accounting.
+- **#6:** complete; expand managed DoH resolver coverage as fleet policy evolves.
+- **#7:** package/sign the extensions and BPF objects.
 - **#8:** complete.
 - **#9:** add production Secure Enclave and TPM quote adapters.
 - **#10:** add rename/delete before/after evidence.
@@ -202,15 +202,16 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    punycode homoglyphs. Feeds the correlator (DGA hit + new persistence item =
    high-severity composite). Threats: C2 beaconing, DNS tunneling.
 
-   **Status (2026-07-28): native UDP capture and correlation implemented.** Strict IDNA/DNS
-   normalization rejects malformed and oversized names; every query requires
-   PID/process attribution. Local entropy-based DGA scoring, punycode/homoglyph
-   alerts, and optional threat-intelligence matches produce bounded results,
-   while enrichment outages never suppress local detections. The macOS DNS
-   proxy relays and emits attributed queries; Linux has a CO-RE `udp_sendmsg`
-   probe. The daemon persists results and emits DGA-plus-persistence composites.
-   TCP/DoH coverage, trained n-gram scoring, and newly-registered-domain
-   enrichment remain.
+   **Status (2026-07-28): complete.** Strict IDNA/DNS normalization rejects
+   malformed and oversized names; every query requires PID/process attribution.
+   The local detector combines entropy with an embedded-corpus-trained trigram
+   model, flags punycode/homoglyph risk, and optionally enriches domain age
+   through bounded RDAP lookups. Enrichment outages never suppress local
+   detections. The macOS DNS proxy and Linux CO-RE probes capture UDP and
+   length-prefixed TCP DNS. RFC 8484 GET/POST messages are decoded on managed
+   plaintext paths, while process-attributed TLS connections to known DoH
+   resolver networks create explicit observations without claiming visibility
+   into encrypted query names. Results feed the existing persistence correlator.
 
 ## Visibility
 
@@ -220,13 +221,15 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    Biggest current visibility gap — ES client sees exec/file/fork but not the
    network. Unlocks #6, #13, #14 and gives SWARM AI better per-event context.
 
-   **Status (2026-07-28): macOS ingestion and Linux TCP capture implemented.** The Network
+   **Status (2026-07-28): native TCP/UDP capture implemented.** The Network
    Extension extracts audit-token PID/UID attribution and flow endpoints into a
-   bounded sink. The daemon accepts only a trusted-permission sink, validates
-   every flow, and stops a required pipeline on malformed input, saturation, or
-   persistence failure. Linux loads a CO-RE kprobe backend for successful
-   process-attributed IPv4/IPv6 TCP connects. Signed extension/object packaging
-   and UDP/byte/duration accounting remain.
+   bounded sink. Its bounded UDP state accounts for cumulative inbound/outbound
+   bytes and duration. The daemon accepts only a trusted-permission sink,
+   validates every flow, and stops a required pipeline on malformed input,
+   saturation, or persistence failure. Linux loads CO-RE kprobe backends for
+   successful process-attributed IPv4/IPv6 TCP connects and UDP sends/receives;
+   the UDP backend records only successful byte counts and emits receive-only
+   flows. Signed extension/object packaging remains.
 
 ## Integrity & Self-Defense
 

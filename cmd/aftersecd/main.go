@@ -464,8 +464,16 @@ func main() {
 			defer cancelDNS()
 			queries := make(chan dnsanalytics.Query, 256)
 			capture := dnsanalytics.NewCapture(cfg.Daemon.DNSSensor.Required)
-			detector := dnsanalytics.NewDetector(nil, dnsanalytics.Policy{
+			var registration dnsanalytics.RegistrationIntel
+			if cfg.Daemon.DNSSensor.RegistrationLookup {
+				registration = &dnsanalytics.RDAPClient{
+					BaseURL: cfg.Daemon.DNSSensor.RDAPBaseURL,
+					Client:  &http.Client{Timeout: 5 * time.Second},
+				}
+			}
+			detector := dnsanalytics.NewDetectorWithRegistration(nil, registration, dnsanalytics.Policy{
 				DGAScoreThreshold: cfg.Daemon.DNSSensor.DGAThreshold,
+				NewDomainMaxAge:   time.Duration(cfg.Daemon.DNSSensor.NewDomainDays) * 24 * time.Hour,
 			})
 			dnsErrors := make(chan error, 2)
 			go func() {

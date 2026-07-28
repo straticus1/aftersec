@@ -13,6 +13,7 @@ struct ProviderEvent: Codable {
     let bytesSent: UInt64?
     let bytesReceived: UInt64?
     let domain: String?
+    let startedTimestamp: Int64?
     let timestamp: Int64
 }
 

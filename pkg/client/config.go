@@ -114,11 +114,14 @@ type NetworkSensorConfig struct {
 }
 
 type DNSSensorConfig struct {
-	Enabled       bool    `yaml:"enabled"`
-	Required      bool    `yaml:"required"`
-	EventPath     string  `yaml:"event_path"`
-	BPFObjectPath string  `yaml:"bpf_object_path"`
-	DGAThreshold  float64 `yaml:"dga_threshold"`
+	Enabled            bool    `yaml:"enabled"`
+	Required           bool    `yaml:"required"`
+	EventPath          string  `yaml:"event_path"`
+	BPFObjectPath      string  `yaml:"bpf_object_path"`
+	DGAThreshold       float64 `yaml:"dga_threshold"`
+	RegistrationLookup bool    `yaml:"registration_lookup"`
+	RDAPBaseURL        string  `yaml:"rdap_base_url"`
+	NewDomainDays      int     `yaml:"new_domain_days"`
 }
 
 type SelfProtectionConfig struct {
@@ -246,11 +249,14 @@ func DefaultClientConfig() *ClientConfig {
 				BPFObjectPath: "/var/lib/aftersec/aftersec-network.bpf.o",
 			},
 			DNSSensor: DNSSensorConfig{
-				Enabled:       false,
-				Required:      false,
-				EventPath:     "/var/run/aftersec/dns-events.jsonl",
-				BPFObjectPath: "/var/lib/aftersec/aftersec-dns.bpf.o",
-				DGAThreshold:  0.75,
+				Enabled:            false,
+				Required:           false,
+				EventPath:          "/var/run/aftersec/dns-events.jsonl",
+				BPFObjectPath:      "/var/lib/aftersec/aftersec-dns.bpf.o",
+				DGAThreshold:       0.75,
+				RegistrationLookup: false,
+				RDAPBaseURL:        "https://rdap.org/domain",
+				NewDomainDays:      30,
 			},
 			SelfProtection: SelfProtectionConfig{
 				Enabled:       true,

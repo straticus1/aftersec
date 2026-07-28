@@ -34,22 +34,25 @@ func NewPlatformBackend(_ string, objectPath string) (Backend, error) {
 }
 
 type linuxFlowEvent struct {
-	TimestampNS uint64
-	PID         uint32
-	UID         uint32
-	LocalPort   uint16
-	RemotePort  uint16
-	Family      uint8
-	Protocol    uint8
-	_           [2]byte
-	Process     [16]byte
-	LocalAddr   [16]byte
-	RemoteAddr  [16]byte
+	TimestampNS   uint64
+	StartedNS     uint64
+	BytesSent     uint64
+	BytesReceived uint64
+	PID           uint32
+	UID           uint32
+	LocalPort     uint16
+	RemotePort    uint16
+	Family        uint8
+	Protocol      uint8
+	_             [2]byte
+	Process       [16]byte
+	LocalAddr     [16]byte
+	RemoteAddr    [16]byte
 }
 
-// Run loads a bounded CO-RE object, attaches only the connect tracepoint, and
-// consumes its ring buffer. Threats: attach, decode, attribution, and ring
-// buffer failures are returned to the required-sensor supervisor.
+// Run loads a bounded CO-RE object, attaches TCP-connect and UDP-I/O probes,
+// and consumes their ring buffer. Threats: attach, decode, attribution, and
+// ring-buffer failures are returned to the required-sensor supervisor.
 func (b *LinuxEBPFBackend) Run(ctx context.Context, emit func(Flow) error) error {
 	if b == nil || b.objectPath == "" || emit == nil {
 		return fmt.Errorf("Linux eBPF network backend is not configured")
@@ -81,6 +84,10 @@ func (b *LinuxEBPFBackend) Run(ctx context.Context, emit func(Flow) error) error
 		{"exit_tcp_v4_connect", "tcp_v4_connect", true},
 		{"enter_tcp_v6_connect", "tcp_v6_connect", false},
 		{"exit_tcp_v6_connect", "tcp_v6_connect", true},
+		{"enter_udp_sendmsg", "udp_sendmsg", false},
+		{"exit_udp_sendmsg", "udp_sendmsg", true},
+		{"enter_udp_recvmsg", "udp_recvmsg", false},
+		{"exit_udp_recvmsg", "udp_recvmsg", true},
 	}
 	for _, probe := range probes {
 		program := collection.Programs[probe.program]
@@ -146,7 +153,11 @@ func (e linuxFlowEvent) flow() (Flow, error) {
 	} else if e.Protocol != 6 {
 		return Flow{}, ErrInvalidFlow
 	}
-	at := time.Now()
+	ended := time.Now()
+	started := ended
+	if e.StartedNS > 0 && e.TimestampNS >= e.StartedNS {
+		started = ended.Add(-time.Duration(e.TimestampNS - e.StartedNS))
+	}
 	return Flow{
 		ProcessID:     int(e.PID),
 		ProcessName:   process,
@@ -156,8 +167,10 @@ func (e linuxFlowEvent) flow() (Flow, error) {
 		RemoteAddress: remote.String(),
 		RemotePort:    e.RemotePort,
 		Protocol:      protocol,
-		StartedAt:     at,
-		EndedAt:       at,
+		BytesSent:     e.BytesSent,
+		BytesReceived: e.BytesReceived,
+		StartedAt:     started,
+		EndedAt:       ended,
 		Attribution:   AttributionExact,
 	}, nil
 }

@@ -18,6 +18,7 @@ type dnsProviderEvent struct {
 	PID       int    `json:"pid"`
 	Process   string `json:"process"`
 	Domain    string `json:"domain"`
+	Protocol  string `json:"protocolName"`
 	Timestamp int64  `json:"timestamp"`
 }
 
@@ -68,7 +69,7 @@ func (s *JSONLSource) Watch(ctx context.Context, emit func(Query) error) error {
 			if event.Kind != "dns_query" || event.Timestamp <= 0 {
 				return fmt.Errorf("invalid DNS provider event")
 			}
-			if err := emit(Query{Domain: event.Domain, PID: event.PID, Process: event.Process}); err != nil {
+			if err := emit(Query{Domain: event.Domain, PID: event.PID, Process: event.Process, Protocol: event.Protocol}); err != nil {
 				return err
 			}
 		}

@@ -5,6 +5,8 @@ import Darwin
 final class AfterSecDNSProxyProvider: NEDNSProxyProvider {
     private var sink: EventSink?
     private let queue = DispatchQueue(label: "com.aftersec.dns-proxy")
+    private var tcpBuffers: [ObjectIdentifier: Data] = [:]
+    private var tcpConnections: [ObjectIdentifier: NWConnection] = [:]
 
     override func startProxy(options: [String : Any]?, completionHandler: @escaping (Error?) -> Void) {
         sink = EventSink(path: "/var/run/aftersec/dns-events.jsonl")
@@ -22,11 +24,14 @@ final class AfterSecDNSProxyProvider: NEDNSProxyProvider {
     }
 
     override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
-        guard let udp = flow as? NEAppProxyUDPFlow,
-              let sink,
+        guard let sink,
               let audit = flow.metaData.sourceAppAuditToken,
               let identity = auditIdentity(audit),
               let process = processPath(identity.pid) else { return false }
+        if let tcp = flow as? NEAppProxyTCPFlow {
+            return startTCP(tcp, sink: sink, identity: identity, process: process)
+        }
+        guard let udp = flow as? NEAppProxyUDPFlow else { return false }
         udp.open(withLocalEndpoint: nil) { [weak self, weak udp] error in
             guard error == nil, let self, let udp else {
                 udp?.closeReadWithError(error)
@@ -36,6 +41,109 @@ final class AfterSecDNSProxyProvider: NEDNSProxyProvider {
             self.read(udp, sink: sink, identity: identity, process: process)
         }
         return true
+    }
+
+    private func startTCP(_ flow: NEAppProxyTCPFlow, sink: EventSink,
+                          identity: (pid: Int32, uid: UInt32), process: String) -> Bool {
+        guard let endpoint = flow.remoteEndpoint as? NWHostEndpoint,
+              let portValue = UInt16(endpoint.port),
+              let port = Network.NWEndpoint.Port(rawValue: portValue) else { return false }
+        let remote = Network.NWEndpoint.hostPort(
+            host: Network.NWEndpoint.Host(endpoint.hostname), port: port)
+        let connection = NWConnection(to: remote, using: .tcp)
+        let key = ObjectIdentifier(flow)
+        tcpBuffers[key] = Data()
+        tcpConnections[key] = connection
+        connection.stateUpdateHandler = { [weak self, weak flow] state in
+            guard let self, let flow else { return }
+            if case .ready = state {
+                flow.open(withLocalEndpoint: nil) { error in
+                    guard error == nil else {
+                        self.finishTCP(key, flow: flow, error: error)
+                        return
+                    }
+                    self.readTCP(flow, key: key, sink: sink, identity: identity, process: process)
+                    self.receiveTCP(connection, flow: flow, key: key)
+                }
+            } else if case .failed(let error) = state {
+                self.finishTCP(key, flow: flow, error: error)
+            }
+        }
+        connection.start(queue: queue)
+        return true
+    }
+
+    private func readTCP(_ flow: NEAppProxyTCPFlow, key: ObjectIdentifier, sink: EventSink,
+                         identity: (pid: Int32, uid: UInt32), process: String) {
+        flow.readData { [weak self, weak flow] data, error in
+            guard let self, let flow, let data, !data.isEmpty, error == nil,
+                  let connection = self.tcpConnections[key] else {
+                self?.finishTCP(key, flow: flow, error: error)
+                return
+            }
+            var buffer = self.tcpBuffers[key] ?? Data()
+            buffer.append(data)
+            while buffer.count >= 2 {
+                let length = Int(buffer[0]) << 8 | Int(buffer[1])
+                guard length > 0 && length <= 65_535 else {
+                    self.finishTCP(key, flow: flow, error: Self.proxyError("invalid TCP DNS frame"))
+                    return
+                }
+                if buffer.count < length + 2 { break }
+                let packet = Data(buffer[2..<(length + 2)])
+                guard let domain = self.questionName(packet) else {
+                    self.finishTCP(key, flow: flow, error: Self.proxyError("invalid TCP DNS question"))
+                    return
+                }
+                let event = ProviderEvent(kind: "dns_query", pid: identity.pid, process: process,
+                                          uid: identity.uid, localAddress: nil, localPort: nil,
+                                          remoteAddress: nil, remotePort: 53, protocolName: "tcp",
+                                          bytesSent: UInt64(packet.count), bytesReceived: nil,
+                                          domain: domain,
+                                          startedTimestamp: nil,
+                                          timestamp: Int64(Date().timeIntervalSince1970))
+                guard sink.send(event) else {
+                    self.finishTCP(key, flow: flow, error: Self.proxyError("event sink write failed"))
+                    return
+                }
+                buffer.removeFirst(length + 2)
+            }
+            self.tcpBuffers[key] = buffer
+            connection.send(content: data, completion: .contentProcessed { sendError in
+                guard sendError == nil else {
+                    self.finishTCP(key, flow: flow, error: sendError)
+                    return
+                }
+                self.readTCP(flow, key: key, sink: sink, identity: identity, process: process)
+            })
+        }
+    }
+
+    private func receiveTCP(_ connection: NWConnection, flow: NEAppProxyTCPFlow,
+                            key: ObjectIdentifier) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_537) {
+            [weak self, weak flow] data, _, complete, error in
+            guard let self, let flow else { return }
+            if let data, !data.isEmpty {
+                flow.write(data) { writeError in
+                    if writeError != nil {
+                        self.finishTCP(key, flow: flow, error: writeError)
+                    }
+                }
+            }
+            if complete || error != nil {
+                self.finishTCP(key, flow: flow, error: error)
+            } else {
+                self.receiveTCP(connection, flow: flow, key: key)
+            }
+        }
+    }
+
+    private func finishTCP(_ key: ObjectIdentifier, flow: NEAppProxyTCPFlow?, error: Error?) {
+        tcpConnections.removeValue(forKey: key)?.cancel()
+        tcpBuffers.removeValue(forKey: key)
+        flow?.closeReadWithError(error)
+        flow?.closeWriteWithError(error)
     }
 
     private func read(_ flow: NEAppProxyUDPFlow, sink: EventSink,
@@ -60,6 +168,7 @@ final class AfterSecDNSProxyProvider: NEDNSProxyProvider {
                                           protocolName: "udp",
                                           bytesSent: UInt64(packet.count), bytesReceived: nil,
                                           domain: domain,
+                                          startedTimestamp: nil,
                                           timestamp: Int64(Date().timeIntervalSince1970))
                 guard sink.send(event) else {
                     flow.closeReadWithError(Self.proxyError("event sink write failed"))
@@ -107,10 +216,14 @@ final class AfterSecDNSProxyProvider: NEDNSProxyProvider {
               packet[4] != 0 || packet[5] != 0 else { return nil }
         var offset = 12
         var labels: [String] = []
+        var terminated = false
         while offset < packet.count {
             let length = Int(packet[offset])
             offset += 1
-            if length == 0 { break }
+            if length == 0 {
+                terminated = true
+                break
+            }
             guard length <= 63, offset + length <= packet.count,
                   let label = String(data: packet[offset..<(offset + length)], encoding: .ascii),
                   !label.isEmpty else { return nil }
@@ -119,7 +232,7 @@ final class AfterSecDNSProxyProvider: NEDNSProxyProvider {
             guard labels.count <= 127 else { return nil }
         }
         let domain = labels.joined(separator: ".")
-        return domain.isEmpty || domain.utf8.count > 253 ? nil : domain
+        return !terminated || domain.isEmpty || domain.utf8.count > 253 ? nil : domain
     }
 
     private func auditIdentity(_ data: Data) -> (pid: Int32, uid: UInt32)? {

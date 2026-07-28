@@ -6,37 +6,58 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/net/idna"
 )
 
 type Query struct {
-	Domain  string
-	PID     int
-	Process string
+	Domain   string
+	PID      int
+	Process  string
+	Protocol string
 }
-type Policy struct{ DGAScoreThreshold float64 }
+type Policy struct {
+	DGAScoreThreshold float64
+	NewDomainMaxAge   time.Duration
+}
 type Result struct {
-	Domain         string
-	PID            int
-	Process        string
-	DGAScore       float64
-	Punycode       bool
-	KnownMalicious bool
-	IntelAvailable bool
-	Suspicious     bool
-	Reasons        []string
+	Domain                string
+	PID                   int
+	Process               string
+	DGAScore              float64
+	EntropyScore          float64
+	NGramScore            float64
+	Punycode              bool
+	KnownMalicious        bool
+	IntelAvailable        bool
+	RegistrationAvailable bool
+	RegisteredAt          time.Time
+	NewlyRegistered       bool
+	Suspicious            bool
+	Reasons               []string
 }
 type ThreatIntel interface {
 	Lookup(context.Context, string) (bool, error)
 }
+type RegistrationIntel interface {
+	RegisteredAt(context.Context, string) (time.Time, error)
+}
 type Detector struct {
-	intel  ThreatIntel
-	policy Policy
+	intel        ThreatIntel
+	registration RegistrationIntel
+	policy       Policy
+	model        *ngramModel
 }
 
-func NewDetector(i ThreatIntel, p Policy) *Detector { return &Detector{intel: i, policy: p} }
+func NewDetector(i ThreatIntel, p Policy) *Detector {
+	return NewDetectorWithRegistration(i, nil, p)
+}
+
+func NewDetectorWithRegistration(i ThreatIntel, registration RegistrationIntel, p Policy) *Detector {
+	return &Detector{intel: i, registration: registration, policy: p, model: trainDefaultNGramModel()}
+}
 
 // NormalizeDomain applies strict IDNA lookup normalization and DNS length rules.
 // Threats: malformed labels and Unicode ambiguity are rejected before scoring.
@@ -68,7 +89,10 @@ func (d *Detector) Analyze(ctx context.Context, q Query) (Result, error) {
 		return Result{}, err
 	}
 	r := Result{Domain: domain, PID: q.PID, Process: q.Process, Punycode: strings.Contains(domain, "xn--")}
-	r.DGAScore = dgaScore(strings.Split(domain, ".")[0])
+	label := strings.Split(domain, ".")[0]
+	r.EntropyScore = dgaScore(label)
+	r.NGramScore = d.model.score(label)
+	r.DGAScore = .45*r.EntropyScore + .55*r.NGramScore
 	threshold := d.policy.DGAScoreThreshold
 	if threshold <= 0 || threshold > 1 {
 		threshold = .75
@@ -89,6 +113,23 @@ func (d *Detector) Analyze(ctx context.Context, q Query) (Result, error) {
 			if bad {
 				r.Suspicious = true
 				r.Reasons = append(r.Reasons, "threat intelligence match")
+			}
+		}
+	}
+	if d.registration != nil {
+		registered, lookupErr := d.registration.RegisteredAt(ctx, domain)
+		if lookupErr == nil && !registered.IsZero() {
+			r.RegistrationAvailable = true
+			r.RegisteredAt = registered.UTC()
+			maxAge := d.policy.NewDomainMaxAge
+			if maxAge <= 0 {
+				maxAge = 30 * 24 * time.Hour
+			}
+			age := time.Since(registered)
+			if age >= 0 && age <= maxAge {
+				r.NewlyRegistered = true
+				r.Suspicious = true
+				r.Reasons = append(r.Reasons, "newly registered domain")
 			}
 		}
 	}
