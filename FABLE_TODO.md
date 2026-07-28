@@ -12,13 +12,18 @@ requires attested identity, DarkScan real-time errors block, rate-limiter errors
 deny, and IOC path values are escaped. The focused gRPC and threat-intelligence
 test suites are green.
 
-This pass also completed the endpoint integration tranche:
+This pass also completed the endpoint and network integration tranches:
 
 - **#2 Live Response:** the REST endpoint now derives tenant and role only from
   validated JWT claims, verifies live endpoint ownership, mints a short-lived
   endpoint-bound Ed25519 action token, and dispatches only `REMOTE_ACTION`.
   Missing signing configuration fails closed. Dispatches and results are
   persisted as append-only hash-linked lifecycle records.
+- **#6 DNS Analytics:** macOS and Linux now capture process-attributed UDP/TCP
+  DNS, managed RFC 8484 requests are decoded, and encrypted connections to known
+  DoH resolvers create explicit observations. Local detection combines entropy,
+  trained trigram scoring, punycode risk, and optional bounded RDAP domain-age
+  enrichment.
 - **#7 Network Sensor:** the macOS Network Extension now extracts audit-token
   PID/UID attribution, app identity, endpoints, and protocol; a permission-
   checked bounded JSONL backend feeds validated flows into daemon telemetry.
@@ -41,7 +46,7 @@ This pass also completed the endpoint integration tranche:
 - **#3:** add native rename-event counters to the attached canary shield.
 - **#4:** complete; server-side policy distribution remains a fleet enhancement.
 - **#5:** complete core discovery/wiring; add mount-race integration tests.
-- **#6:** complete; expand managed DoH resolver coverage as fleet policy evolves.
+- **#6:** complete; managed resolver-catalog expansion is a fleet enhancement.
 - **#7:** package/sign the extensions and BPF objects.
 - **#8:** complete.
 - **#9:** add production Secure Enclave and TPM quote adapters.
@@ -198,7 +203,7 @@ FIRST; these are the follow-on architecture, not a reason to wait.
 6. **Egress DNS Threat Analytics.** DNS query capture with process
    attribution (macOS: NEDNSProxy, unified-log fallback; Linux: eBPF kprobe /
    dnstap). Detect DGA domains (local entropy + n-gram model, no cloud
-   dependency), newly-registered-domain lookups via `pkg/threatintel`,
+   dependency), newly-registered-domain lookups via bounded RDAP enrichment,
    punycode homoglyphs. Feeds the correlator (DGA hit + new persistence item =
    high-severity composite). Threats: C2 beaconing, DNS tunneling.
 
