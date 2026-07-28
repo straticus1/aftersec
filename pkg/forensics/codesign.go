@@ -21,8 +21,22 @@ type SignatureInfo struct {
 func VerifySignature(filePath string) (SignatureInfo, error) {
 	var info SignatureInfo
 
-	// -dv --verbose=4 outputs to stderr
-	cmd := exec.Command("codesign", "-dv", filePath)
+	verify := exec.Command("/usr/bin/codesign", "--verify", "--strict", filePath)
+	var verifyError bytes.Buffer
+	verify.Stderr = &verifyError
+	if err := verify.Run(); err != nil {
+		output := verifyError.String()
+		if strings.Contains(output, "code object is not signed at all") ||
+			strings.Contains(output, "invalid signature") ||
+			strings.Contains(output, "not valid") {
+			info.Valid = false
+			return info, nil
+		}
+		return info, fmt.Errorf("verify native code signature: %w", err)
+	}
+
+	// -dv --verbose=4 emits signing identity metadata to stderr.
+	cmd := exec.Command("/usr/bin/codesign", "-dv", "--verbose=4", filePath)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
@@ -61,12 +75,12 @@ func VerifySignature(filePath string) (SignatureInfo, error) {
 
 // AppSignatureResult holds the cryptographic health of a macOS application bundle
 type AppSignatureResult struct {
-	IsValid     bool
-	IsAdHoc     bool
-	TeamID      string
-	Authority   string
-	Issues      []string
-	RawOutput   string
+	IsValid   bool
+	IsAdHoc   bool
+	TeamID    string
+	Authority string
+	Issues    []string
+	RawOutput string
 }
 
 // VerifyMacBundle runs Apple's native codesign and spctl tools against an .app bundle
@@ -83,7 +97,7 @@ func VerifyMacBundle(ctx context.Context, appPath string) (*AppSignatureResult, 
 	var stderr bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
-	
+
 	err := cmd.Run()
 	output := stderr.String() + out.String()
 	res.RawOutput = output
@@ -138,7 +152,7 @@ func VerifyMacBundle(ctx context.Context, appPath string) (*AppSignatureResult, 
 		combined := spctlOut.String() + spctlErr.String()
 		res.Issues = append(res.Issues, fmt.Sprintf("Gatekeeper Rejection: %v", err))
 		res.Issues = append(res.Issues, fmt.Sprintf("spctl output: %s", combined))
-		res.IsValid = false 
+		res.IsValid = false
 		return res, nil
 	}
 

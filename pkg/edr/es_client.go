@@ -24,6 +24,7 @@ type ESConsumer struct {
 }
 
 func NotifyWriteEventCode() uint32 { return uint32(C.ES_EVENT_TYPE_NOTIFY_WRITE) }
+func AuthWriteEventCode() uint32   { return uint32(C.auth_open_event_code()) }
 
 // globalConsumer is required because CGO callbacks cannot carry Go context cleanly
 var globalConsumer *ESConsumer
@@ -50,9 +51,19 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 		eventType = EventNotifyMount
 	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_WRITE {
 		eventType = EventNotifyWrite
+	} else if msg.event_type == C.ES_EVENT_TYPE_AUTH_OPEN && bool(C.open_requests_write(msg)) {
+		eventType = EventAuthWrite
+		C.retain_message_safe(msg)
+	} else if msg.event_type == C.ES_EVENT_TYPE_AUTH_OPEN {
+		// AUTH_OPEN is subscribed only to intercept mutations. Reads are
+		// immediately allowed and never cross the asynchronous Go boundary.
+		C.retain_message_safe(msg)
+		C.respond_auth_and_release(client, msg, true, false)
+		return
 	}
 
 	var execPath string
+	var actorPath string
 	var mountPath string
 
 	pid := int(C.get_pid(msg))
@@ -62,7 +73,8 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 	var length C.int
 	cPath := C.get_executable_path(msg, &length)
 	if length > 0 {
-		execPath = C.GoStringN(cPath, length)
+		actorPath = C.GoStringN(cPath, length)
+		execPath = actorPath
 	}
 
 	// Mount path extraction (only populated if struct contains statfs struct pointer)
@@ -78,6 +90,13 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 			execPath = C.GoStringN(tPath, tLen)
 		}
 	}
+	if eventType == EventAuthWrite {
+		var tLen C.int
+		tPath := C.get_open_target_path(msg, &tLen)
+		if tLen > 0 {
+			execPath = C.GoStringN(tPath, tLen)
+		}
+	}
 
 	globalConsumer.events <- ProcessEvent{
 		Type:      eventType,
@@ -85,6 +104,7 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 		PID:       pid,
 		PPID:      ppid,
 		ExecPath:  execPath,
+		ActorPath: actorPath,
 		MountPath: mountPath,
 		UID:       uid,
 		Msg:       unsafe.Pointer(msg),

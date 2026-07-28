@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"aftersec/pkg/billing"
 	"aftersec/pkg/darkscan"
 	"aftersec/pkg/ratelimit"
+	"aftersec/pkg/response"
 	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/clamav"
 	grpcserver "aftersec/pkg/server/grpc"
@@ -23,6 +25,14 @@ type enterpriseServer interface {
 	SetPendingSigmaRule(rule string)
 }
 
+type RemoteActionMinter interface {
+	Mint(context.Context, response.MintRequest) (string, error)
+}
+
+type RemoteActionAudit interface {
+	AppendDispatch(context.Context, response.AuditEvent, string) error
+}
+
 // Router encapsulates the HTTP routing logic for the management UI
 type Router struct {
 	mux             *http.ServeMux
@@ -33,6 +43,18 @@ type Router struct {
 	stripeClient    *billing.Client
 	banditLimiter   *ratelimit.RedisRateLimiter
 	darkwebLimiter  *ratelimit.RedisRateLimiter
+	actionMinter    RemoteActionMinter
+	actionAudit     RemoteActionAudit
+}
+
+// SetActionMinter enables signed remote response. A nil minter leaves the
+// endpoint disabled, so a missing signing key cannot degrade to raw commands.
+func (r *Router) SetActionMinter(minter RemoteActionMinter) {
+	r.actionMinter = minter
+}
+
+func (r *Router) SetActionAudit(audit RemoteActionAudit) {
+	r.actionAudit = audit
 }
 
 // NewRouter initializes a fresh API layout.

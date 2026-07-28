@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"log"
 	"net"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	grpcapi "aftersec/pkg/api/grpc"
 	"aftersec/pkg/attestation"
 	"aftersec/pkg/darkscan"
+	"aftersec/pkg/response"
+	"aftersec/pkg/selfprotect"
 	"aftersec/pkg/server/api/rest"
 	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/clamav"
@@ -42,6 +45,15 @@ func main() {
 	}
 	if err := dbClient.RunMigrations("migrations/002_attested_enrollment.up.sql"); err != nil {
 		log.Fatalf("Attested enrollment migration failed: %v", err)
+	}
+	if err := dbClient.RunMigrations("migrations/003_remote_response_audit.up.sql"); err != nil {
+		log.Fatalf("Remote response migration failed: %v", err)
+	}
+	if err := dbClient.RunMigrations("migrations/004_agent_silence_incidents.up.sql"); err != nil {
+		log.Fatalf("Agent silence incident migration failed: %v", err)
+	}
+	if err := dbClient.RunMigrations("migrations/005_remote_response_audit_lifecycle.up.sql"); err != nil {
+		log.Fatalf("Remote response lifecycle migration failed: %v", err)
 	}
 
 	repos := repository.NewRepositories(dbClient.DB)
@@ -96,6 +108,18 @@ func main() {
 		log.Fatalf("Failed to initialize attested enrollment: %v", err)
 	}
 	enterpriseSrv.SetEnrollmentService(enrollmentRuntime.Service, certificateTTL)
+	heartbeatTracker := selfprotect.NewTracker(5*time.Minute, 2*time.Minute, repos.SilenceIncidents)
+	enterpriseSrv.SetHeartbeatTracker(heartbeatTracker)
+	enterpriseSrv.SetCommandResultAudit(repos.RemoteActionAudit)
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for checkedAt := range ticker.C {
+			if err := enterpriseSrv.CheckHeartbeatSilence(checkedAt); err != nil {
+				log.Printf("Heartbeat silence detection failed closed: %v", err)
+			}
+		}
+	}()
 
 	// Initialize DarkScan client
 	darkscanCfg := darkscan.DefaultConfig()
@@ -120,6 +144,18 @@ func main() {
 
 	// 2. Start basic REST API
 	mux := rest.NewRouter(jwtManager, repos, enterpriseSrv, clamavStorage, clamavUpdater, darkscanClient, redisClient)
+	mux.SetActionAudit(repos.RemoteActionAudit)
+	if keyPath := os.Getenv("REMOTE_ACTION_SIGNING_KEY_PATH"); keyPath != "" {
+		key, keyErr := os.ReadFile(keyPath)
+		if keyErr != nil || len(key) != ed25519.PrivateKeySize {
+			log.Printf("Remote response disabled: signing key is unavailable or invalid")
+		} else {
+			mux.SetActionMinter(response.NewActionMinter(ed25519.PrivateKey(key), repos.Endpoints, 2*time.Minute, time.Now))
+			log.Println("Signed remote response enabled")
+		}
+	} else {
+		log.Println("Remote response disabled: REMOTE_ACTION_SIGNING_KEY_PATH is not configured")
+	}
 
 	go func() {
 		log.Println("Listening for REST API on :8080")

@@ -85,6 +85,19 @@ func (r *EndpointRepository) GetByID(ctx context.Context, id string) (*Endpoint,
 	return &ep, nil
 }
 
+// OrganizationForEndpoint returns the persisted tenant owner used when
+// authorizing endpoint-bound remote actions.
+func (r *EndpointRepository) OrganizationForEndpoint(ctx context.Context, id string) (string, error) {
+	endpoint, err := r.GetByID(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if endpoint == nil {
+		return "", nil
+	}
+	return endpoint.OrganizationID, nil
+}
+
 // Update modifies an existing endpoint
 func (r *EndpointRepository) Update(ctx context.Context, ep *Endpoint) error {
 	result, err := r.db.ExecContext(ctx, `

@@ -11,6 +11,8 @@ import (
 	grpcapi "aftersec/pkg/api/grpc"
 	"aftersec/pkg/attestation"
 	"aftersec/pkg/eventjournal"
+	"aftersec/pkg/selfprotect"
+	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -27,6 +29,12 @@ type Server struct {
 	mu               sync.RWMutex
 	activeStreams    map[string]chan *grpcapi.ServerCommand
 	pendingSigmaRule string
+	heartbeatTracker *selfprotect.Tracker
+	commandAudit     CommandResultAudit
+}
+
+type CommandResultAudit interface {
+	AppendResult(context.Context, string, string, string, string, time.Time) error
 }
 
 func (s *Server) SetEnrollmentService(service *attestation.EnrollmentService, certificateTTL time.Duration) {
@@ -34,6 +42,28 @@ func (s *Server) SetEnrollmentService(service *attestation.EnrollmentService, ce
 	defer s.mu.Unlock()
 	s.enrollment = service
 	s.certificateTTL = certificateTTL
+}
+
+func (s *Server) SetHeartbeatTracker(tracker *selfprotect.Tracker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.heartbeatTracker = tracker
+}
+
+func (s *Server) SetCommandResultAudit(audit CommandResultAudit) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commandAudit = audit
+}
+
+func (s *Server) CheckHeartbeatSilence(now time.Time) error {
+	s.mu.RLock()
+	tracker := s.heartbeatTracker
+	s.mu.RUnlock()
+	if tracker == nil {
+		return fmt.Errorf("heartbeat silence tracker is not configured")
+	}
+	return tracker.Check(now)
 }
 
 func (s *Server) SetPendingSigmaRule(rule string) {
@@ -146,8 +176,27 @@ func (s *Server) Enroll(ctx context.Context, req *grpcapi.EnrollRequest) (*grpca
 }
 
 func (s *Server) Heartbeat(ctx context.Context, req *grpcapi.HeartbeatRequest) (*grpcapi.HeartbeatResponse, error) {
-	if req.TenantId == "" {
-		return nil, status.Error(codes.Unauthenticated, "missing tenant_id")
+	if req == nil || req.TenantId == "" || req.HardwareId == "" || req.Timestamp <= 0 {
+		return nil, status.Error(codes.Unauthenticated, "complete heartbeat identity is required")
+	}
+	if ctx != nil {
+		if claims, ok := auth.ClaimsFromContext(ctx); ok && claims.OrganizationID != req.TenantId {
+			return nil, status.Error(codes.PermissionDenied, "heartbeat tenant does not match authenticated organization")
+		}
+	}
+	receivedAt := time.Now()
+	s.mu.RLock()
+	tracker := s.heartbeatTracker
+	s.mu.RUnlock()
+	if tracker != nil {
+		heartbeatAt := time.Unix(req.Timestamp, 0)
+		if err := tracker.Observe(selfprotect.Heartbeat{
+			TenantID:   req.TenantId,
+			HardwareID: req.HardwareId,
+			At:         heartbeatAt,
+		}, receivedAt); err != nil {
+			return nil, status.Error(codes.PermissionDenied, "heartbeat rejected")
+		}
 	}
 
 	action := "NONE"
@@ -225,6 +274,13 @@ func (s *Server) ConnectCommandStream(stream grpcapi.EnterpriseService_ConnectCo
 		return err
 	}
 
+	if msg.TenantId == "" || msg.HardwareId == "" || msg.Status != "ACK" || msg.CommandId != "" {
+		return status.Error(codes.InvalidArgument, "invalid command stream registration")
+	}
+	if claims, ok := auth.ClaimsFromContext(stream.Context()); ok && claims.OrganizationID != msg.TenantId {
+		return status.Error(codes.PermissionDenied, "command stream tenant does not match authenticated organization")
+	}
+	tenantID := msg.TenantId
 	endpointID := msg.HardwareId
 
 	cmdChan := make(chan *grpcapi.ServerCommand, 50)
@@ -248,7 +304,22 @@ func (s *Server) ConnectCommandStream(stream grpcapi.EnterpriseService_ConnectCo
 				errChan <- err
 				return
 			}
-			// Route command execution output to the Dashboard / Admin Log
+			if res.TenantId != tenantID || res.HardwareId != endpointID ||
+				res.CommandId == "" || (res.Status != "SUCCESS" && res.Status != "FAILED") {
+				errChan <- status.Error(codes.PermissionDenied, "invalid command result identity or status")
+				return
+			}
+			s.mu.RLock()
+			audit := s.commandAudit
+			s.mu.RUnlock()
+			if audit == nil {
+				errChan <- status.Error(codes.FailedPrecondition, "command result audit is not configured")
+				return
+			}
+			if err := audit.AppendResult(stream.Context(), tenantID, endpointID, res.CommandId, res.Status, time.Now()); err != nil {
+				errChan <- status.Error(codes.Unavailable, "command result audit persistence failed")
+				return
+			}
 			log.Printf("Received Command Output from %s for %s: %s", endpointID, res.CommandId, res.Status)
 		}
 	}()

@@ -44,6 +44,7 @@ type ESConsumer struct {
 }
 
 func NotifyWriteEventCode() uint32 { return 0 }
+func AuthWriteEventCode() uint32   { return 0 }
 
 // NewESConsumer creates a fanotify-backed sensor.
 // Tries FAN_CLASS_CONTENT (blocking, requires CAP_SYS_ADMIN) first; falls back to
@@ -71,7 +72,7 @@ func NewESConsumer(eventChannel chan<- ProcessEvent) (*ESConsumer, error) {
 // The events []uint32 parameter is ignored — darwin ES event type constants have no
 // direct fanotify equivalent; we arm all relevant events unconditionally.
 func (c *ESConsumer) Subscribe(_ []uint32) error {
-	mask := uint64(unix.FAN_OPEN_EXEC | unix.FAN_CLOSE_WRITE)
+	mask := uint64(unix.FAN_OPEN_EXEC | unix.FAN_OPEN | unix.FAN_CLOSE_WRITE | unix.FAN_CLOSE_NOWRITE)
 	if c.authMode {
 		mask |= unix.FAN_OPEN_EXEC_PERM
 	}
@@ -163,6 +164,7 @@ func (c *ESConsumer) dispatchFanotifyEvent(meta *unix.FanotifyEventMetadata) {
 
 	execPath := fdReadlink(fd)
 	ppid, uid := procInfoFromPID(pid)
+	actorPath := fdReadlinkPath(fmt.Sprintf("/proc/%d/exe", pid))
 
 	var evType EventType
 	var msgPtr unsafe.Pointer
@@ -177,7 +179,13 @@ func (c *ESConsumer) dispatchFanotifyEvent(meta *unix.FanotifyEventMetadata) {
 		evType = EventNotifyExec
 		defer unix.Close(fd)
 	case meta.Mask&unix.FAN_CLOSE_WRITE != 0:
-		evType = EventNotifyCreate
+		evType = EventNotifyWrite
+		defer unix.Close(fd)
+	case meta.Mask&unix.FAN_CLOSE_NOWRITE != 0:
+		evType = EventNotifyClose
+		defer unix.Close(fd)
+	case meta.Mask&unix.FAN_OPEN != 0:
+		evType = EventNotifyOpen
 		defer unix.Close(fd)
 	default:
 		unix.Close(fd)
@@ -192,6 +200,7 @@ func (c *ESConsumer) dispatchFanotifyEvent(meta *unix.FanotifyEventMetadata) {
 		PID:       pid,
 		PPID:      ppid,
 		ExecPath:  execPath,
+		ActorPath: actorPath,
 		UID:       uid,
 		Msg:       msgPtr,
 	}:
@@ -213,6 +222,14 @@ func (c *ESConsumer) dispatchFanotifyEvent(meta *unix.FanotifyEventMetadata) {
 			unix.Close(msg.eventFd)
 		}
 	}
+}
+
+func fdReadlinkPath(path string) string {
+	value, err := os.Readlink(path)
+	if err != nil {
+		return ""
+	}
+	return value
 }
 
 // readProcConnector subscribes to PROC_EVENT_EXIT via the kernel proc connector

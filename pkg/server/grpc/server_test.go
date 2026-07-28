@@ -1,10 +1,33 @@
 package grpcserver
 
 import (
+	"context"
+	"sync"
 	"testing"
+	"time"
 
 	grpcapi "aftersec/pkg/api/grpc"
+	"aftersec/pkg/selfprotect"
+	"aftersec/pkg/server/auth"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
+
+type silenceStore struct {
+	mu        sync.Mutex
+	incidents []selfprotect.Incident
+	err       error
+}
+
+func (s *silenceStore) RecordSilence(incident selfprotect.Incident) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return s.err
+	}
+	s.incidents = append(s.incidents, incident)
+	return nil
+}
 
 func TestDispatchCommand_NoActiveStream(t *testing.T) {
 	s := NewServer(nil)
@@ -118,11 +141,67 @@ func TestHeartbeat_WithPendingSigmaRule(t *testing.T) {
 	s := NewServer(nil)
 	s.SetPendingSigmaRule("detection: condition: true")
 
-	resp, err := s.Heartbeat(nil, &grpcapi.HeartbeatRequest{TenantId: "tenant-1"})
+	resp, err := s.Heartbeat(nil, &grpcapi.HeartbeatRequest{
+		TenantId: "tenant-1", HardwareId: "endpoint-1", Timestamp: time.Now().Unix(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if resp.Action == "" || resp.Action == "NONE" {
 		t.Errorf("expected action to encode sigma rule, got %q", resp.Action)
+	}
+}
+
+func TestHeartbeat_RecordsSilenceIncidentAfterDeadline(t *testing.T) {
+	store := &silenceStore{}
+	s := NewServer(nil)
+	s.SetHeartbeatTracker(selfprotect.NewTracker(5*time.Minute, 2*time.Minute, store))
+	heartbeatAt := time.Now().Truncate(time.Second)
+
+	_, err := s.Heartbeat(nil, &grpcapi.HeartbeatRequest{
+		TenantId: "tenant-1", HardwareId: "endpoint-1", Timestamp: heartbeatAt.Unix(),
+	})
+	if err != nil {
+		t.Fatalf("heartbeat failed: %v", err)
+	}
+	if err := s.CheckHeartbeatSilence(heartbeatAt.Add(6 * time.Minute)); err != nil {
+		t.Fatalf("silence check failed: %v", err)
+	}
+	if len(store.incidents) != 1 || store.incidents[0].HardwareID != "endpoint-1" {
+		t.Fatalf("expected one endpoint silence incident, got %+v", store.incidents)
+	}
+}
+
+func TestHeartbeat_RejectsClockSkewInsteadOfResettingSilence(t *testing.T) {
+	store := &silenceStore{}
+	s := NewServer(nil)
+	s.SetHeartbeatTracker(selfprotect.NewTracker(5*time.Minute, time.Minute, store))
+
+	_, err := s.Heartbeat(nil, &grpcapi.HeartbeatRequest{
+		TenantId: "tenant-1", HardwareId: "endpoint-1", Timestamp: time.Now().Add(-10 * time.Minute).Unix(),
+	})
+	if err == nil {
+		t.Fatal("expected skewed heartbeat to be rejected")
+	}
+}
+
+func TestHeartbeat_RejectsTenantDifferentFromAuthenticatedOrganization(t *testing.T) {
+	manager := auth.NewJWTManager("test-secret", time.Minute)
+	token, err := manager.GenerateToken("operator", "org-authenticated", "security_operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token))
+	s := NewServer(nil)
+	_, err = manager.GRPCUnaryInterceptor(
+		ctx,
+		&grpcapi.HeartbeatRequest{TenantId: "org-other", HardwareId: "endpoint-1", Timestamp: time.Now().Unix()},
+		&grpc.UnaryServerInfo{FullMethod: "/aftersec.api.EnterpriseService/Heartbeat"},
+		func(handlerCtx context.Context, request interface{}) (interface{}, error) {
+			return s.Heartbeat(handlerCtx, request.(*grpcapi.HeartbeatRequest))
+		},
+	)
+	if err == nil {
+		t.Fatal("cross-tenant heartbeat was accepted")
 	}
 }

@@ -51,12 +51,30 @@ const char* get_mount_path(const es_message_t *msg, int *out_len) {
 }
 
 const char* get_target_path(const es_message_t *msg, int *out_len) {
-    if (!msg || !msg->event.write.target) {
+    if (!msg || msg->event_type != ES_EVENT_TYPE_NOTIFY_WRITE || !msg->event.write.target) {
         *out_len = 0;
         return "";
     }
     *out_len = (int)msg->event.write.target->path.length;
     return msg->event.write.target->path.data;
+}
+
+const char* get_open_target_path(const es_message_t *msg, int *out_len) {
+    if (!msg || msg->event_type != ES_EVENT_TYPE_AUTH_OPEN || !msg->event.open.file) {
+        *out_len = 0;
+        return "";
+    }
+    *out_len = (int)msg->event.open.file->path.length;
+    return msg->event.open.file->path.data;
+}
+
+bool open_requests_write(const es_message_t *msg) {
+    if (!msg || msg->event_type != ES_EVENT_TYPE_AUTH_OPEN) return false;
+    return (msg->event.open.fflag & (FWRITE | O_APPEND | O_TRUNC)) != 0;
+}
+
+uint32_t auth_open_event_code(void) {
+    return (uint32_t)ES_EVENT_TYPE_AUTH_OPEN;
 }
 
 void retain_message_safe(const es_message_t *msg) {

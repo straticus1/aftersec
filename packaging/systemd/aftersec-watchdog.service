@@ -1,0 +1,17 @@
+[Unit]
+Description=AfterSec local agent watchdog
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/aftersec-watchdog --pid-file /run/aftersecd.pid --agent /usr/local/sbin/aftersecd
+Restart=always
+RestartSec=2
+User=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/run /var/lib/aftersec
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

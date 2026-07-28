@@ -1,15 +1,46 @@
 package devicecontrol
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
+
+type recordingDecision struct {
+	records int
+}
+
+func (r *recordingDecision) RecordDeviceDecision(context.Context, Device, Access, error) error {
+	r.records++
+	return nil
+}
+
+type singleDeviceSource struct{ device Device }
+
+func (s singleDeviceSource) Watch(_ context.Context, emit func(Device) error) error {
+	return emit(s.device)
+}
 
 func TestPolicyBlocksUnknownDeviceClass(t *testing.T) {
 	p := Policy{Mode: BlockUnknown, Allowed: map[DeviceID]Access{"known": ReadWrite}}
 	decision, err := p.Decide(Device{ID: "new", Class: "mass-storage", Serial: "s1"})
 	if !errors.Is(err, ErrDeviceDenied) || decision != Deny {
 		t.Fatalf("decision=%v err=%v", decision, err)
+	}
+}
+
+func TestControllerAppliesAndRecordsUnknownDeviceDenial(t *testing.T) {
+	mounter := &fakeMounter{}
+	controller := NewController(Policy{Mode: BlockUnknown, Allowed: map[DeviceID]Access{}}, mounter)
+	recorder := &recordingDecision{}
+	err := controller.Run(context.Background(), singleDeviceSource{device: Device{
+		ID: "/dev/disk9", Class: "mass-storage", Serial: "unknown",
+	}}, recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mounter.access != Deny || recorder.records != 1 {
+		t.Fatalf("access=%q records=%d", mounter.access, recorder.records)
 	}
 }
 

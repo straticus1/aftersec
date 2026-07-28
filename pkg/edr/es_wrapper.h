@@ -12,6 +12,9 @@ uint32_t get_uid(const es_message_t *msg);
 const char* get_executable_path(const es_message_t *msg, int *out_len);
 const char* get_mount_path(const es_message_t *msg, int *out_len);
 const char* get_target_path(const es_message_t *msg, int *out_len);
+const char* get_open_target_path(const es_message_t *msg, int *out_len);
+bool open_requests_write(const es_message_t *msg);
+uint32_t auth_open_event_code(void);
 
 // Responds to an AUTH event and releases the retained message
 void respond_auth_and_release(es_client_t *client, const es_message_t *msg, bool allow, bool cache);

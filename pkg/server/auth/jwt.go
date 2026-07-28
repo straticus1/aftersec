@@ -106,40 +106,63 @@ func (m *JWTManager) HTTPMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (m *JWTManager) GRPCUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	if err := m.authorizeGRPC(ctx, info.FullMethod); err != nil {
+	claims, err := m.validatedGRPCClaims(ctx, info.FullMethod)
+	if err != nil {
 		return nil, err
+	}
+	if claims != nil {
+		ctx = context.WithValue(ctx, claimsContextKey{}, claims)
 	}
 	return handler(ctx, req)
 }
 
 func (m *JWTManager) GRPCStreamInterceptor(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	if err := m.authorizeGRPC(stream.Context(), info.FullMethod); err != nil {
+	claims, err := m.validatedGRPCClaims(stream.Context(), info.FullMethod)
+	if err != nil {
 		return err
+	}
+	if claims != nil {
+		stream = &claimsServerStream{
+			ServerStream: stream,
+			ctx:          context.WithValue(stream.Context(), claimsContextKey{}, claims),
+		}
 	}
 	return handler(srv, stream)
 }
 
 func (m *JWTManager) authorizeGRPC(ctx context.Context, method string) error {
+	_, err := m.validatedGRPCClaims(ctx, method)
+	return err
+}
+
+type claimsServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *claimsServerStream) Context() context.Context { return s.ctx }
+
+func (m *JWTManager) validatedGRPCClaims(ctx context.Context, method string) (*AfterSecClaims, error) {
 	// Enroll uses an enrollment token enforced over mTLS — exempt only the exact method path
 	if method == "/aftersec.api.EnterpriseService/Enroll" {
-		return nil
+		return nil, nil
 	}
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return status.Errorf(codes.Unauthenticated, "metadata is not provided")
+		return nil, status.Errorf(codes.Unauthenticated, "metadata is not provided")
 	}
 	values := md["authorization"]
 	if len(values) == 0 {
-		return status.Errorf(codes.Unauthenticated, "authorization token is not provided")
+		return nil, status.Errorf(codes.Unauthenticated, "authorization token is not provided")
 	}
 	authHeader := values[0]
 	parts := strings.SplitN(authHeader, " ", 2)
 	if len(parts) != 2 || parts[0] != "Bearer" {
-		return status.Errorf(codes.Unauthenticated, "authorization token format is invalid")
+		return nil, status.Errorf(codes.Unauthenticated, "authorization token format is invalid")
 	}
-	_, err := m.ValidateToken(parts[1])
+	claims, err := m.ValidateToken(parts[1])
 	if err != nil {
-		return status.Errorf(codes.Unauthenticated, "authorization token is invalid: %v", err)
+		return nil, status.Errorf(codes.Unauthenticated, "authorization token is invalid: %v", err)
 	}
-	return nil
+	return claims, nil
 }

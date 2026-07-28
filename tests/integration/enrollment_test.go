@@ -111,7 +111,7 @@ func TestClientEnrollmentFlow(t *testing.T) {
 	ctx := metadata.NewOutgoingContext(context.Background(), md)
 
 	hbRes, err := rpc.Heartbeat(ctx, &grpcapi.HeartbeatRequest{
-		TenantId:   "tenant-12345",
+		TenantId:   "test-org",
 		HardwareId: "test-hw-id",
 		Timestamp:  time.Now().Unix(),
 	})

@@ -5,8 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	grpcapi "aftersec/pkg/api/grpc"
+	"aftersec/pkg/response"
+	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/repository"
 )
 
@@ -105,11 +108,13 @@ func (rt *Router) deleteEndpoint(w http.ResponseWriter, r *http.Request, id stri
 }
 
 type EndpointActionRequest struct {
-	EndpointID string `json:"endpoint_id"`
-	Action     string `json:"action"`
-	Payload    string `json:"payload"` // optional base64-encoded parameters
+	EndpointID string            `json:"endpoint_id"`
+	Action     response.Action   `json:"action"`
+	Arguments  map[string]string `json:"arguments,omitempty"`
 }
 
+// Threats: tenant, role, token audience, and executable arguments are never
+// accepted outside the signed claims authorized from validated JWT context.
 func (rt *Router) handleEndpointAction(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -125,19 +130,71 @@ func (rt *Router) handleEndpointAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing required fields: endpoint_id, action", http.StatusBadRequest)
 		return
 	}
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims.OrganizationID == "" || claims.Role == "" || claims.UserID == "" {
+		http.Error(w, "Validated authorization claims are required", http.StatusUnauthorized)
+		return
+	}
+	if rt.actionMinter == nil || rt.enterpriseSrv == nil {
+		http.Error(w, "Remote response is not configured", http.StatusServiceUnavailable)
+		return
+	}
 
-	cmdID := newCommandID()
+	cmdID, err := newCommandID()
+	if err != nil {
+		http.Error(w, "Unable to create remote command", http.StatusInternalServerError)
+		return
+	}
+	token, err := rt.actionMinter.Mint(r.Context(), response.MintRequest{
+		Role:       claims.Role,
+		TenantID:   claims.OrganizationID,
+		EndpointID: req.EndpointID,
+		Action:     req.Action,
+		Arguments:  req.Arguments,
+	})
+	if err != nil {
+		http.Error(w, "Remote action is not authorized", http.StatusForbidden)
+		return
+	}
+	if rt.actionAudit == nil {
+		http.Error(w, "Remote response audit is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if err := rt.actionAudit.AppendDispatch(r.Context(), response.AuditEvent{
+		CommandID:  cmdID,
+		TenantID:   claims.OrganizationID,
+		EndpointID: req.EndpointID,
+		Action:     req.Action,
+		Status:     "DISPATCH_REQUESTED",
+		Timestamp:  time.Now(),
+	}, claims.UserID); err != nil {
+		http.Error(w, "Remote response audit is unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	cmd := &grpcapi.ServerCommand{
 		CommandId: cmdID,
-		Action:    req.Action,
+		Action:    "REMOTE_ACTION",
+		Payload:   token,
 	}
 
 	if err := rt.enterpriseSrv.DispatchCommand(req.EndpointID, cmd); err != nil {
+		auditErr := rt.actionAudit.AppendDispatch(r.Context(), response.AuditEvent{
+			CommandID:  cmdID,
+			TenantID:   claims.OrganizationID,
+			EndpointID: req.EndpointID,
+			Action:     req.Action,
+			Status:     "DISPATCH_FAILED",
+			Timestamp:  time.Now(),
+		}, claims.UserID)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
+		message := err.Error()
+		if auditErr != nil {
+			message = "dispatch failed and failure audit could not be persisted"
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
-			"error":   err.Error(),
+			"error":   message,
 		})
 		return
 	}
@@ -151,8 +208,10 @@ func (rt *Router) handleEndpointAction(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func newCommandID() string {
-	b := make([]byte, 8)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+func newCommandID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

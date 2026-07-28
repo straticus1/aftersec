@@ -4,6 +4,59 @@ Handoff for a Fable planning pass. Fable diagnoses + plans; Opus hardens the
 handlers. Read `~/development/ads-fable-utils/SECURITY-RULES.md` FIRST — each area
 needs a `Threats:` note and must fail closed.
 
+## Current status (2026-07-28)
+
+The July 11 defect list is retained below as audit history. All five named
+fail-open defects are now fixed: telemetry never drop-and-acks, enrollment
+requires attested identity, DarkScan real-time errors block, rate-limiter errors
+deny, and IOC path values are escaped. The focused gRPC and threat-intelligence
+test suites are green.
+
+This pass also completed the endpoint integration tranche:
+
+- **#2 Live Response:** the REST endpoint now derives tenant and role only from
+  validated JWT claims, verifies live endpoint ownership, mints a short-lived
+  endpoint-bound Ed25519 action token, and dispatches only `REMOTE_ACTION`.
+  Missing signing configuration fails closed. Dispatches and results are
+  persisted as append-only hash-linked lifecycle records.
+- **#7 Network Sensor:** the macOS Network Extension now extracts audit-token
+  PID/UID attribution, app identity, endpoints, and protocol; a permission-
+  checked bounded JSONL backend feeds validated flows into daemon telemetry.
+  Sink/write/persistence failures stop a required sensor. Linux now loads a
+  process-attributed CO-RE TCP backend. Remaining: signed extension/BPF object
+  packaging and UDP byte/duration coverage.
+- **#11 Self-Protection:** server heartbeats now feed the silence tracker;
+  clock-skewed heartbeats are rejected and missed deadlines create durable,
+  tenant-isolated `agent_silence_incidents`. ES authorization and Linux BPF-LSM
+  hooks enforce protected mutations, and the separately supervised local
+  watchdog restarts a missing agent. Remaining: native service-stop and
+  entitlement-revocation authorization.
+
+### Active backlog by feature
+
+- **#1:** platform integration tests for quarantine/release.
+- **#2:** complete; add PostgreSQL integration coverage for concurrent audit
+  writers.
+- **#3:** add native rename-event counters to the attached canary shield.
+- **#4:** complete; server-side policy distribution remains a fleet enhancement.
+- **#5:** complete core discovery/wiring; add mount-race integration tests.
+- **#6:** add TCP/DoH capture, trained n-gram scoring, and NRD enrichment.
+- **#7:** package/sign the extensions and BPF objects; add UDP and byte/duration
+  accounting.
+- **#8:** complete.
+- **#9:** add production Secure Enclave and TPM quote adapters.
+- **#10:** add rename/delete before/after evidence.
+- **#11:** add native service-stop authorization and entitlement-revocation
+  detection.
+- **#12:** replace unsigned heartbeat-delivered Sigma YAML with signed,
+  versioned, rollback-protected packs.
+- **#13:** ingest verified KEV/EPSS feeds and join rankings to live runtime
+  observations.
+- **#14:** connect the fleet correlation engine to durable server telemetry and
+  alert persistence.
+- **#15:** ship full OS-versioned CIS packs, scheduling, and signed evidence
+  export.
+
 ## Context (2026-07-11 audit)
 A claimed "6-fix batch" was audited. Three of the named fixes — **SecurityOps
 stubs, EnrichIP nesting, and a July gRPC data-loss fix — DO NOT EXIST** in this repo
@@ -13,10 +66,10 @@ fail-open bugs and left **honest failing tests** in place at commit `e4070ae`:
 - `pkg/server/grpc/faildclosed_test.go`
 - `pkg/threatintel/enrich_ip_test.go`
 
-`go test ./pkg/server/grpc` is **RED by design** until the handlers below are
-hardened. `pkg/threatintel` is green (5 passing tests locking in correct behavior).
+These tests were originally red by design. They are now green and remain as
+regression coverage.
 
-## The defects (with tests already written)
+## Resolved defects (tests retained)
 1. **`pkg/server/grpc/server.go:116-125` — `StreamEvents` telemetry data loss +
    false ack.** On a full `eventQueue` it silently drops the event (non-blocking
    `select { default: /* drop */ }`) AND still counts it in the returned
@@ -31,14 +84,14 @@ hardened. `pkg/threatintel` is green (5 passing tests locking in correct behavio
    rule 1). Failing tests: `TestEnroll_RejectsUnidentifiedRequest`,
    `TestEnroll_DoesNotIssueStaticToken`.
 
-## Flagged, not yet tested (add negative tests + fix)
-- `pkg/darkscan/daemon_client.go:226` — comment literally says "default to allow for
-  fail-open security." Fail-open in an EDR is a hole. Should fail closed.
-- `pkg/server/api/rest/router.go:208` — Redis-error path fails open.
-- `pkg/threatintel/darkapi.go:316` — builds the IOC lookup URL with an unescaped
-  `value` (needs `url.PathEscape`); injection / malformed-lookup risk.
+## Resolved audit flags
 
-## Definition of done
+- `pkg/darkscan/daemon_client.go` blocks on real-time scan failure.
+- `pkg/server/api/rest/router.go` returns 503 when Redis cannot establish a
+  rate-limit decision.
+- `pkg/threatintel/darkapi.go` escapes IOC route components.
+
+## Original definition of done — satisfied
 - The 3 failing gRPC tests go GREEN by hardening the handlers — NOT by weakening the
   tests. `go test ./pkg/server/grpc` clean.
 - Each flagged fail-open above gets a negative test proving the bad case is denied,
@@ -70,8 +123,10 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    **Status (2026-07-12): enforcement foundation implemented.** A fail-closed,
    idempotent quarantine state machine plus macOS `pf` and Linux `nftables`
    adapters retain containment when control-channel verification fails and
-   require explicit authorization for release. Live server token minting and
-   daemon command-loop startup wiring remain.
+   require explicit authorization for release. **Update (2026-07-28):** live
+   server token minting, REST dispatch, system runner, and daemon command-loop
+   wiring are implemented, and dispatch/result lifecycle records are durable.
+   Platform quarantine/release integration tests remain.
 
 2. **Live Response Remote Triage.** Audited remote actions (kill process,
    collect file, pull memory region, list persistence) reusing
@@ -89,8 +144,10 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    PostgreSQL schema is append-only with forced tenant RLS. Server-side RBAC
    now propagates only validated JWT claims and mints short-lived Ed25519 action
    tokens after explicit role/action authorization and endpoint tenant-ownership
-   verification. REST dispatch injection and concrete bounded forensics runners
-   remain.
+   verification. **Update (2026-07-28):** REST dispatch injection and bounded
+   system/forensics runners are wired. Dispatch-requested and terminal result
+   lifecycle records are now transactionally appended to the tenant-isolated,
+   hash-linked PostgreSQL audit table.
 
 3. **Ransomware Behavioral Shield with Canary Decoys.** Plant decoy files in
    user dirs; any process touching a canary is suspended immediately (ES AUTH
@@ -99,10 +156,12 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    `pkg/edr`. Threats: mass-encryption ransomware, wipers. Fail-closed:
    suspend first, ask the AI/operator second.
 
-   **Status (2026-07-12): detection/enforcement foundation implemented.**
+   **Status (2026-07-28): native event attachment implemented.**
    Private CSPRNG-named decoys reject symlink directories; canary touches and
    rename/entropy bursts synchronously suspend through `SIGSTOP` before evidence
-   recording. Endpoint Security/fanotify event-loop attachment remains.
+   recording. ES `AUTH_OPEN` and Linux fanotify open/write events now feed
+   canary containment and durable telemetry. Rename-burst counters still need
+   native rename-event coverage.
 
 ## Prevention
 
@@ -115,12 +174,13 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    enforce last signed cached policy; no policy ever seen → learn mode, never
    silent-allow.
 
-   **Status (2026-07-12): policy engine implemented.** Ed25519-signed,
+   **Status (2026-07-28): policy and native authorization implemented.** Ed25519-signed,
    monotonically versioned policies reject tampering, expiry, rollback, invalid
    identities, and corrupt caches. The cache installs atomically with private
    permissions; no-policy state is explicit learn mode, while an expired last
-   policy denies. AUTH_EXEC/fanotify startup wiring and provenance collectors
-   remain.
+   policy denies. ES `AUTH_EXEC`/fanotify execution permission events now run a
+   race-checked SHA-256 authorization. macOS collects strict native code-signing
+   identity and Linux records dpkg/rpm package provenance.
 
 5. **USB & Removable Media Control.** Block/allow/read-only policies for mass
    storage: IOKit + DiskArbitration on macOS, udev + USBGuard-style
@@ -129,6 +189,12 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    exfil, rogue HID. Fail-closed: unknown device class under "block" policy →
    deny mount and alert.
 
+   **Status (2026-07-28): discovery and policy wiring implemented.** Linux
+   consumes kernel udev netlink events; macOS enumerates removable `IOMedia`
+   entries through the IOKit registry. The controller enforces deny/read-only/
+   read-write decisions through the platform mounter and durably journals every
+   outcome. Deployment must explicitly enable the disruptive block policy.
+
 6. **Egress DNS Threat Analytics.** DNS query capture with process
    attribution (macOS: NEDNSProxy, unified-log fallback; Linux: eBPF kprobe /
    dnstap). Detect DGA domains (local entropy + n-gram model, no cloud
@@ -136,13 +202,15 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    punycode homoglyphs. Feeds the correlator (DGA hit + new persistence item =
    high-severity composite). Threats: C2 beaconing, DNS tunneling.
 
-   **Status (2026-07-12): analytics foundation implemented.** Strict IDNA/DNS
+   **Status (2026-07-28): native UDP capture and correlation implemented.** Strict IDNA/DNS
    normalization rejects malformed and oversized names; every query requires
    PID/process attribution. Local entropy-based DGA scoring, punycode/homoglyph
    alerts, and optional threat-intelligence matches produce bounded results,
-   while enrichment outages never suppress local detections. Native macOS/Linux
-   DNS capture, durable event wiring, trained n-gram scoring, and
-   DGA-plus-persistence correlation remain.
+   while enrichment outages never suppress local detections. The macOS DNS
+   proxy relays and emits attributed queries; Linux has a CO-RE `udp_sendmsg`
+   probe. The daemon persists results and emits DGA-plus-persistence composites.
+   TCP/DoH coverage, trained n-gram scoring, and newly-registered-domain
+   enrichment remain.
 
 ## Visibility
 
@@ -152,11 +220,13 @@ FIRST; these are the follow-on architecture, not a reason to wait.
    Biggest current visibility gap — ES client sees exec/file/fork but not the
    network. Unlocks #6, #13, #14 and gives SWARM AI better per-event context.
 
-   **Status (2026-07-12): prerequisite enforcement hardening landed; sensor
-   remains unimplemented.** Linux fanotify and daemon `AUTH_EXEC` saturation
-   now deny rather than allow, and DarkScan/detonation errors deny in enterprise
-   enforcement mode. Process-attributed flow capture and DNS analytics are still
-   outstanding and are not claimed by this tranche.
+   **Status (2026-07-28): macOS ingestion and Linux TCP capture implemented.** The Network
+   Extension extracts audit-token PID/UID attribution and flow endpoints into a
+   bounded sink. The daemon accepts only a trusted-permission sink, validates
+   every flow, and stops a required pipeline on malformed input, saturation, or
+   persistence failure. Linux loads a CO-RE kprobe backend for successful
+   process-attributed IPv4/IPv6 TCP connects. Signed extension/object packaging
+   and UDP/byte/duration accounting remain.
 
 ## Integrity & Self-Defense
 
@@ -206,6 +276,11 @@ FIRST; these are the follow-on architecture, not a reason to wait.
     the writing process attached. Before/after content capture for small
     files. Threats: persistence installation, PAM backdoors, log tampering.
 
+    **Status (2026-07-28): native write evidence implemented.** macOS pairs
+    `AUTH_OPEN` with `NOTIFY_WRITE`; Linux pairs fanotify open with close-write
+    and cancels read-only opens. Bounded before/after content and writer PID are
+    durably recorded. Rename/delete evidence is still future hardening.
+
 11. **Agent Self-Protection & Tamper Detection.** ES AUTH denies unsigned
     writes to `aftersecd` binaries/config/journal; detect `launchctl unload` /
     `systemctl stop` and TCC/entitlement revocation attempts; lightweight
@@ -214,6 +289,14 @@ FIRST; these are the follow-on architecture, not a reason to wait.
     death). Threats: competent malware kills the EDR first. Fail-closed: on
     the server, missing heartbeat = incident, not "probably asleep." Should
     precede shipping enforcement features attackers will want to disable.
+
+   **Status (2026-07-28): endpoint and server protection implemented.** Validated
+   heartbeats update a bounded tracker; skewed heartbeats are denied and missed
+   deadlines create durable tenant-isolated incidents. macOS denies protected
+   mutations with ES authorization; Linux ships a BPF-LSM inode guard for
+   write/create/unlink/rename denial. A separate watchdog binary plus launchd
+   and systemd service definitions restarts a missing agent. Native service-stop
+   authorization and entitlement-revocation detection remain.
 
 12. **Signed Detection-as-Code Rule Packs (Sigma support).** Rule engine in
     the event pipeline consuming Sigma rules compiled to native matchers,
@@ -250,9 +333,8 @@ FIRST; these are the follow-on architecture, not a reason to wait.
     next to the Stripe billing tiers. Threats: config drift + evidence
     tampering after collection (hence signing).
 
-## Suggested build order
+## Suggested next build order
 
-Foundation first: **#8, #9** (also clear the red tests above) → **#7**
-(network visibility unlocks #6, #13, #14) → **#11** (self-protection before
-enforcement features) → containment/prevention (**#1, #3, #4**) → fleet +
-compliance layer (**#13, #14, #15**) last.
+Package/sign native sensors (**#7**) → complete service-stop/rename hardening
+(**#11/#3/#10**) → production hardware attestation (**#9**) → signed Sigma
+distribution (**#12**) → fleet/feed/compliance integrations (**#13/#14/#15**).

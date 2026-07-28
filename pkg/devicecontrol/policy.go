@@ -6,6 +6,7 @@
 package devicecontrol
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -41,6 +42,12 @@ type Policy struct {
 }
 
 type Mounter interface{ Apply(Device, Access) error }
+type Source interface {
+	Watch(context.Context, func(Device) error) error
+}
+type Recorder interface {
+	RecordDeviceDecision(context.Context, Device, Access, error) error
+}
 
 type Controller struct {
 	policy  Policy
@@ -57,12 +64,39 @@ func (c *Controller) Handle(device Device) error {
 	}
 	access, err := c.policy.Decide(device)
 	if err != nil {
+		if (errors.Is(err, ErrDeviceDenied) || errors.Is(err, ErrInvalidDevice)) &&
+			device.ID != "" && len(device.ID) <= 256 {
+			if applyErr := c.mounter.Apply(device, Deny); applyErr != nil {
+				return fmt.Errorf("apply removable-media denial: %w", applyErr)
+			}
+		}
 		return err
 	}
 	if err := c.mounter.Apply(device, access); err != nil {
 		return fmt.Errorf("apply removable-media authorization: %w", err)
 	}
 	return nil
+}
+
+func (c *Controller) Run(ctx context.Context, source Source, recorder Recorder) error {
+	if c == nil || source == nil || recorder == nil {
+		return ErrDeviceDenied
+	}
+	return source.Watch(ctx, func(device Device) error {
+		access, policyErr := c.policy.Decide(device)
+		handleErr := c.Handle(device)
+		if recordErr := recorder.RecordDeviceDecision(ctx, device, access, handleErr); recordErr != nil {
+			return recordErr
+		}
+		// A successfully enforced deny is a policy outcome, not a sensor
+		// failure. Enforcement or evidence failures stop the pipeline.
+		if policyErr != nil &&
+			(errors.Is(policyErr, ErrDeviceDenied) || errors.Is(policyErr, ErrInvalidDevice)) &&
+			(handleErr == policyErr || errors.Is(handleErr, ErrDeviceDenied) || errors.Is(handleErr, ErrInvalidDevice)) {
+			return nil
+		}
+		return handleErr
+	})
 }
 
 func (p Policy) Decide(d Device) (Access, error) {

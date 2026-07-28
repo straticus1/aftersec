@@ -106,15 +106,66 @@ type EndpointAIConfig struct {
 	OrtLibPath       string         `yaml:"ort_lib_path"` // path to libonnxruntime.so; Linux ONNX build only
 }
 
+type NetworkSensorConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	Required      bool   `yaml:"required"`
+	EventPath     string `yaml:"event_path"`
+	BPFObjectPath string `yaml:"bpf_object_path"`
+}
+
+type DNSSensorConfig struct {
+	Enabled       bool    `yaml:"enabled"`
+	Required      bool    `yaml:"required"`
+	EventPath     string  `yaml:"event_path"`
+	BPFObjectPath string  `yaml:"bpf_object_path"`
+	DGAThreshold  float64 `yaml:"dga_threshold"`
+}
+
+type SelfProtectionConfig struct {
+	Enabled        bool     `yaml:"enabled"`
+	Required       bool     `yaml:"required"`
+	PIDFile        string   `yaml:"pid_file"`
+	BPFObjectPath  string   `yaml:"bpf_object_path"`
+	ProtectedPaths []string `yaml:"protected_paths"`
+}
+
+type BinaryAuthorizationConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	Required        bool   `yaml:"required"`
+	PublicKeyBase64 string `yaml:"public_key_base64"`
+	PolicyCachePath string `yaml:"policy_cache_path"`
+}
+
+type RansomwareConfig struct {
+	Enabled           bool     `yaml:"enabled"`
+	Required          bool     `yaml:"required"`
+	CanaryDirectories []string `yaml:"canary_directories"`
+	RenameBurst       int      `yaml:"rename_burst"`
+	EntropyThreshold  float64  `yaml:"entropy_threshold"`
+}
+
+type DeviceControlConfig struct {
+	Enabled  bool              `yaml:"enabled"`
+	Required bool              `yaml:"required"`
+	Mode     string            `yaml:"mode"`
+	Allowed  map[string]string `yaml:"allowed"`
+}
+
 type DaemonConfig struct {
-	Scheduling  SchedulingConfig  `yaml:"scheduling"`
-	Resources   ResourceConfig    `yaml:"resources"`
-	Alerts      AlertConfig       `yaml:"alerts"`
-	Remediation RemediationConfig `yaml:"remediation"`
-	AI          AIConfig          `yaml:"ai"`
-	EndpointAI  EndpointAIConfig  `yaml:"endpoint_ai"`
-	ThreatIntel ThreatIntelConfig `yaml:"threat_intel"`
-	DarkScan    darkscan.Config   `yaml:"darkscan"`
+	Scheduling     SchedulingConfig          `yaml:"scheduling"`
+	Resources      ResourceConfig            `yaml:"resources"`
+	Alerts         AlertConfig               `yaml:"alerts"`
+	Remediation    RemediationConfig         `yaml:"remediation"`
+	AI             AIConfig                  `yaml:"ai"`
+	EndpointAI     EndpointAIConfig          `yaml:"endpoint_ai"`
+	ThreatIntel    ThreatIntelConfig         `yaml:"threat_intel"`
+	DarkScan       darkscan.Config           `yaml:"darkscan"`
+	NetworkSensor  NetworkSensorConfig       `yaml:"network_sensor"`
+	DNSSensor      DNSSensorConfig           `yaml:"dns_sensor"`
+	SelfProtection SelfProtectionConfig      `yaml:"self_protection"`
+	BinaryAuth     BinaryAuthorizationConfig `yaml:"binary_authorization"`
+	Ransomware     RansomwareConfig          `yaml:"ransomware"`
+	DeviceControl  DeviceControlConfig       `yaml:"device_control"`
 }
 
 // ClientConfig represents the client-side configuration
@@ -188,6 +239,46 @@ func DefaultClientConfig() *ClientConfig {
 				},
 			},
 			DarkScan: *darkscan.DefaultConfig(),
+			NetworkSensor: NetworkSensorConfig{
+				Enabled:       false,
+				Required:      false,
+				EventPath:     "/var/run/aftersec/network-events.jsonl",
+				BPFObjectPath: "/var/lib/aftersec/aftersec-network.bpf.o",
+			},
+			DNSSensor: DNSSensorConfig{
+				Enabled:       false,
+				Required:      false,
+				EventPath:     "/var/run/aftersec/dns-events.jsonl",
+				BPFObjectPath: "/var/lib/aftersec/aftersec-dns.bpf.o",
+				DGAThreshold:  0.75,
+			},
+			SelfProtection: SelfProtectionConfig{
+				Enabled:       true,
+				Required:      false,
+				PIDFile:       "/var/run/aftersecd.pid",
+				BPFObjectPath: "/var/lib/aftersec/aftersec-selfprotect.bpf.o",
+				ProtectedPaths: []string{
+					"/usr/local/sbin/aftersecd",
+					"/etc/aftersec",
+					"/var/lib/aftersec",
+				},
+			},
+			BinaryAuth: BinaryAuthorizationConfig{
+				Enabled:         true,
+				Required:        false,
+				PolicyCachePath: filepath.Join(home, ".aftersec", "binary-policy.json"),
+			},
+			Ransomware: RansomwareConfig{
+				Enabled:           true,
+				Required:          false,
+				CanaryDirectories: []string{filepath.Join(home, ".aftersec", "canaries")},
+				RenameBurst:       20,
+				EntropyThreshold:  7.5,
+			},
+			DeviceControl: DeviceControlConfig{
+				Enabled: false, Required: false, Mode: "block-unknown",
+				Allowed: map[string]string{},
+			},
 		},
 		Core: *core.DefaultConfig(),
 	}
