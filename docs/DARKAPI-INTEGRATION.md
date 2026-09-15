@@ -144,7 +144,7 @@ and evidence freshness are separate views.
 Both events must belong to the same owner and canonical host, come from opposite
 apps, and fall within 24 hours of each other. Observation times are preferred;
 legacy evidence without source time uses reception time. A shared correlation UUID
-or matching SHA-256, remote IP, domain, or PID plus valid process start time makes
+or matching SHA-256, remote IP, domain, or boot identity plus PID and valid process start time makes
 an association. Different JSON naming styles and nested connection/process/identity
 records are normalized. A flow's start time is not a process start time. Hostnames
 and PID alone are never used. IP/domain associations can be broad; the UI shows the
@@ -156,18 +156,40 @@ Aftersec uses a separate `darkapi-outbox.sqlite` beside its credential file,
 independent of the existing enterprise exporter and its synced flags. Records get
 stable UUIDs before network delivery, survive restart, and remain until exact
 server acknowledgment. Queue rows are bound to the device that created them and
-are never reassigned after enrollment changes. The loop runs every 30 seconds,
-with 30-second HTTP timeouts and up to 20 batches per cycle. Individual events are
-limited to 256 KiB; queued payloads to 100 MiB. Capacity/storage errors are returned
-and logged; existing pending evidence is not evicted. A rejected poison record
-remains for operator diagnosis rather than being silently dropped.
+are never reassigned after enrollment changes. The loop polls its durable source
+once per second, with 30-second HTTP timeouts and up to 20 upload batches per cycle.
+Heartbeat/resource reports run every 30 seconds. Retryable failures use bounded
+exponential backoff with jitter and honor Retry-After (up to one hour).
+Individual events are limited to 256 KiB; pending plus quarantined payloads to
+100 MiB. Capacity/storage errors preserve the source cursor and pending evidence.
+Permanent rejected events move to quarantine while valid records continue;
+authentication, rate-limit and server failures remain pending.
 
-The wrapper writes to the original storage manager before the DarkAPI queue; these
-are separate stores, not one atomic transaction. A crash between those writes can
-leave evidence only in the original destination. Existing producers that ignore
-storage errors can also lose newly generated export records. This release does
-not backfill Aftersec's old local journal. Darkd's existing backend history is
-backfilled into the shared timeline without rewriting original records.
+The SQLite journal is the replayable telemetry source. DarkAPI imports it using
+its own persistent cursor, atomically committing outbox rows with cursor updates.
+A crash after journal append but before the secondary telemetry projection is
+recoverable. Saved posture has its own cursor. Enterprise synced flags are neither
+read nor changed. Producers must still handle failed source writes. Pre-journal
+SQL-only telemetry is not reconstructed by this backfill.
+
+```sh
+aftersec cloud queue --credentials /secure/path/aftersec-darkapi.json
+aftersec cloud backfill --source /existing/aftersec/storage --credentials /secure/path/aftersec-darkapi.json
+aftersec cloud retry EVENT_ID --credentials /secure/path/aftersec-darkapi.json
+```
+
+Backfill queues historical journal/posture; the running daemon handles delivery.
+Stable source event IDs deduplicate replay. Invalid source JSON remains locally
+quarantined and cannot be blindly requeued; journal hash-chain corruption stops
+import. Queue status reports queued, accepted, rejected-attempt and pending counts.
+Quarantined payloads consume capacity and require operator investigation.
+
+The v2 envelope adds schema, boot/agent version, stream/sequence, collection status,
+typed entities and explicit facts. Missing historical provenance stays unknown.
+DarkAPI enqueues analysis transactionally and provides detections, evidence,
+analysis status and bounded replay in the Endpoints console. Deterministic rules
+require sufficient source facts from both apps; they do not create missing sensor
+coverage or statistical anomaly baselines. See backend `DARKAPI_NG_PLAN_SEPT26.md`.
 
 Known credential-shaped object fields are redacted recursively, including nested
 arrays. This is not general-purpose DLP: source free text, command arguments and
