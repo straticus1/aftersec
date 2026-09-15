@@ -198,3 +198,38 @@ func (j *Journal) Acknowledge(sequence int64) error {
 	}
 	return nil
 }
+
+// ReadAfter supports independent destination cursors without consuming the
+// enterprise acknowledged flag. Verify the predecessor and every returned link.
+func (j *Journal) ReadAfter(after int64, limit int) ([]Record, error) {
+	if after < 0 || limit < 1 || limit > 1000 {
+		return nil, fmt.Errorf("invalid journal cursor or limit")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var previous []byte
+	if after > 0 {
+		if err := j.db.QueryRow("SELECT hash FROM event_journal WHERE sequence=?", after).Scan(&previous); err != nil {
+			return nil, ErrTampered
+		}
+	}
+	rows, err := j.db.Query("SELECT sequence,payload,prev_hash,hash FROM event_journal WHERE sequence>? ORDER BY sequence LIMIT ?", after, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := []Record{}
+	for rows.Next() {
+		var record Record
+		if err := rows.Scan(&record.Sequence, &record.Payload, &record.PrevHash, &record.Hash); err != nil {
+			return nil, err
+		}
+		if record.Sequence != after+1 || !bytes.Equal(record.PrevHash, previous) || !bytes.Equal(record.Hash, recordHash(previous, record.Payload)) {
+			return nil, ErrTampered
+		}
+		records = append(records, record)
+		after = record.Sequence
+		previous = record.Hash
+	}
+	return records, rows.Err()
+}

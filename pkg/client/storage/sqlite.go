@@ -11,6 +11,7 @@ import (
 
 	"aftersec/pkg/core"
 	"aftersec/pkg/eventjournal"
+	"aftersec/pkg/reportmeta"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -224,12 +225,14 @@ func (m *SQLiteManager) LogTelemetryEvent(source, eventType, severity, details s
 	}
 	timestamp := time.Now().UTC()
 	payload, err := json.Marshal(struct {
-		Timestamp string `json:"timestamp"`
-		Source    string `json:"source"`
-		EventType string `json:"event_type"`
-		Severity  string `json:"severity"`
-		Details   string `json:"details"`
-	}{timestamp.Format(time.RFC3339Nano), source, eventType, severity, details})
+		BootID       string `json:"boot_id,omitempty"`
+		AgentVersion string `json:"agent_version"`
+		Timestamp    string `json:"timestamp"`
+		Source       string `json:"source"`
+		EventType    string `json:"event_type"`
+		Severity     string `json:"severity"`
+		Details      string `json:"details"`
+	}{reportmeta.BootID(), reportmeta.Version(), timestamp.Format(time.RFC3339Nano), source, eventType, severity, details})
 	if err != nil {
 		return fmt.Errorf("encode telemetry journal record: %w", err)
 	}

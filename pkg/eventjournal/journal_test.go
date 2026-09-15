@@ -125,3 +125,30 @@ func TestAcknowledgeAdvancesOnlyContiguousPrefix(t *testing.T) {
 		t.Fatalf("out-of-range ack error = %v, want ErrInvalidAck", err)
 	}
 }
+
+func TestIndependentCursorIncludesAcknowledgedRecords(t *testing.T) {
+	j, err := Open(filepath.Join(t.TempDir(), "independent.sqlite"), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	for _, payload := range []string{"first", "second"} {
+		if _, err = j.Append([]byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = j.Acknowledge(2); err != nil {
+		t.Fatal(err)
+	}
+	records, err := j.ReadAfter(0, 1)
+	if err != nil || len(records) != 1 || records[0].Sequence != 1 {
+		t.Fatal(records, err)
+	}
+	records, err = j.ReadAfter(1, 100)
+	if err != nil || len(records) != 1 || records[0].Sequence != 2 {
+		t.Fatal(records, err)
+	}
+	if _, err = j.ReadAfter(99, 100); err == nil {
+		t.Fatal("invalid cursor accepted")
+	}
+}
