@@ -3,32 +3,31 @@ package darkapi
 import (
 	"aftersec/pkg/client/storage"
 	"aftersec/pkg/core"
+	"aftersec/pkg/reportmeta"
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 )
 
-// Exporter maintains its own durable destination queue. It never acknowledges
-// the existing enterprise exporter or consumes its shared synced flag.
+// Exporter advances only its own source cursor, atomically with destination rows.
+// The original enterprise exporter's acknowledged/synced fields are never changed.
 type Exporter struct {
 	storage.Manager
-	db       *sql.DB
-	client   *Client
-	mu       sync.Mutex
-	flushMu  sync.Mutex
-	policyMu sync.Mutex
-	maxBytes int64
+	db                            *sql.DB
+	client                        *Client
+	source                        storage.ReportingSource
+	sourceID, streamID            string
+	mu, flushMu, policyMu, syncMu sync.Mutex
+	maxBytes                      int64
 }
 
 func Open(manager storage.Manager, client *Client, path string) (*Exporter, error) {
@@ -43,32 +42,64 @@ func Open(manager storage.Manager, client *Client, path string) (*Exporter, erro
 		return nil, err
 	}
 	f.Close()
-	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL")
+	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL&_synchronous=FULL")
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err = db.Exec(`CREATE TABLE IF NOT EXISTS darkapi_outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,device_id TEXT NOT NULL,event_id TEXT NOT NULL UNIQUE,payload BLOB NOT NULL)`); err != nil {
+	e := &Exporter{Manager: manager, db: db, client: client, maxBytes: 100 << 20}
+	if err = e.initialize(); err != nil {
 		db.Close()
 		return nil, err
 	}
-	return &Exporter{Manager: manager, db: db, client: client, maxBytes: 100 << 20}, nil
+	if source, ok := manager.(storage.ReportingSource); ok {
+		e.source = source
+		e.sourceID, err = source.ReportingIdentity()
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		var bound string
+		if _, err = db.Exec("INSERT OR IGNORE INTO darkapi_source_bindings(source_id,device_id) VALUES(?,?)", e.sourceID, e.DeviceID()); err == nil {
+			err = db.QueryRow("SELECT device_id FROM darkapi_source_bindings WHERE source_id=?", e.sourceID).Scan(&bound)
+		}
+		if err != nil || bound != e.DeviceID() {
+			db.Close()
+			return nil, fmt.Errorf("source journal is bound to another device or cannot be bound")
+		}
+	}
+	return e, nil
+}
+func (e *Exporter) initialize() error {
+	for _, q := range []string{
+		`CREATE TABLE IF NOT EXISTS darkapi_outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,device_id TEXT NOT NULL,event_id TEXT NOT NULL UNIQUE,payload BLOB NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS darkapi_quarantine(event_id TEXT PRIMARY KEY,device_id TEXT NOT NULL,payload BLOB NOT NULL,reason TEXT NOT NULL,created_at TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS darkapi_source_bindings(source_id TEXT PRIMARY KEY,device_id TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS darkapi_source_cursors(source_id TEXT NOT NULL,stream TEXT NOT NULL,sequence INTEGER NOT NULL,PRIMARY KEY(source_id,stream))`,
+		`CREATE TABLE IF NOT EXISTS darkapi_delivery_stats(device_id TEXT PRIMARY KEY,queued_total INTEGER NOT NULL DEFAULT 0,accepted_total INTEGER NOT NULL DEFAULT 0,rejected_attempts INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS darkapi_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)`,
+	} {
+		if _, err := e.db.Exec(q); err != nil {
+			return err
+		}
+	}
+	id, err := newID()
+	if err != nil {
+		return err
+	}
+	if _, err = e.db.Exec("INSERT OR IGNORE INTO darkapi_metadata(key,value) VALUES('stream_id',?)", id); err != nil {
+		return err
+	}
+	if err = e.db.QueryRow("SELECT value FROM darkapi_metadata WHERE key='stream_id'").Scan(&e.streamID); err != nil {
+		return err
+	}
+	_, err = e.db.Exec("INSERT OR IGNORE INTO darkapi_delivery_stats(device_id,queued_total) SELECT ?,COUNT(*) FROM darkapi_outbox WHERE device_id=?", e.DeviceID(), e.DeviceID())
+	return err
 }
 func (e *Exporter) DeviceID() string { return e.client.DeviceID() }
 func (e *Exporter) Close() error     { return e.db.Close() }
-func newID() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	b[6] = b[6]&15 | 64
-	b[8] = b[8]&63 | 128
-	s := hex.EncodeToString(b[:])
-	return s[:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:], nil
-}
-func (e *Exporter) Queue(event Event) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+
+func (e *Exporter) enqueue(tx *sql.Tx, event Event) error {
 	if event.EventID == "" {
 		id, err := newID()
 		if err != nil {
@@ -76,29 +107,101 @@ func (e *Exporter) Queue(event Event) error {
 		}
 		event.EventID = id
 	}
-	if event.Event.Time == "" {
+	if event.Event.Time == "" && event.Event.SchemaVersion == 0 {
 		event.Event.Time = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	if event.Event.SchemaVersion == 0 {
+		event.Event.SchemaVersion = 2
+		event.Event.BootID = reportmeta.BootID()
+		event.Event.AgentVersion = reportmeta.Version()
+		event.Event.StreamID = e.streamID
+		event.Event.CollectionStatus = "observed"
+		if err := tx.QueryRow("SELECT queued_total+1 FROM darkapi_delivery_stats WHERE device_id=?", e.DeviceID()).Scan(&event.Event.Sequence); err != nil {
+			return err
+		}
 	}
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	if len(payload) > 256<<10 {
-		return fmt.Errorf("event exceeds 256 KiB")
+	var existing []byte
+	err = tx.QueryRow("SELECT payload FROM darkapi_outbox WHERE event_id=? UNION ALL SELECT payload FROM darkapi_quarantine WHERE event_id=?", event.EventID, event.EventID).Scan(&existing)
+	if err == nil {
+		if string(existing) != string(payload) {
+			return fmt.Errorf("conflicting local event ID")
+		}
+		return nil
 	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	var used int64
+	if err = tx.QueryRow("SELECT (SELECT COALESCE(SUM(length(payload)),0) FROM darkapi_outbox)+(SELECT COALESCE(SUM(length(payload)),0) FROM darkapi_quarantine)").Scan(&used); err != nil {
+		return err
+	}
+	if used+int64(len(payload)) > e.maxBytes {
+		return fmt.Errorf("DarkAPI queue full; source cursor and pending evidence retained")
+	}
+	if len(payload) > 256<<10 {
+		if _, err = tx.Exec("INSERT INTO darkapi_quarantine(event_id,device_id,payload,reason,created_at) VALUES(?,?,?,?,?)", event.EventID, e.DeviceID(), payload, "event exceeds 256 KiB", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+		if _, err = tx.Exec("UPDATE darkapi_delivery_stats SET rejected_attempts=rejected_attempts+1 WHERE device_id=?", e.DeviceID()); err != nil {
+			return err
+		}
+	} else if _, err = tx.Exec("INSERT INTO darkapi_outbox(device_id,event_id,payload) VALUES(?,?,?)", e.DeviceID(), event.EventID, payload); err != nil {
+		return err
+	}
+	_, err = tx.Exec("UPDATE darkapi_delivery_stats SET queued_total=queued_total+1 WHERE device_id=?", e.DeviceID())
+	return err
+}
+func (e *Exporter) Queue(event Event) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	tx, err := e.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var used int64
-	if err := tx.QueryRow("SELECT COALESCE(SUM(length(payload)),0) FROM darkapi_outbox").Scan(&used); err != nil {
+	if err = e.enqueue(tx, event); err != nil {
 		return err
 	}
-	if used+int64(len(payload)) > e.maxBytes {
-		return fmt.Errorf("DarkAPI queue full; pending evidence retained")
+	return tx.Commit()
+}
+func (e *Exporter) ack(ids []int64) error {
+	tx, err := e.db.Begin()
+	if err != nil {
+		return err
 	}
-	if _, err := tx.Exec("INSERT INTO darkapi_outbox(device_id,event_id,payload) VALUES (?,?,?)", e.client.DeviceID(), event.EventID, payload); err != nil {
+	defer tx.Rollback()
+	for _, id := range ids {
+		result, err := tx.Exec("DELETE FROM darkapi_outbox WHERE id=? AND device_id=?", id, e.DeviceID())
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec("UPDATE darkapi_delivery_stats SET accepted_total=accepted_total+? WHERE device_id=?", n, e.DeviceID()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+func (e *Exporter) quarantine(id int64, reason string) error {
+	tx, err := e.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("INSERT INTO darkapi_quarantine(event_id,device_id,payload,reason,created_at) SELECT event_id,device_id,payload,?,? FROM darkapi_outbox WHERE id=? AND device_id=?", reason, time.Now().UTC().Format(time.RFC3339Nano), id, e.DeviceID()); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("DELETE FROM darkapi_outbox WHERE id=? AND device_id=?", id, e.DeviceID()); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("UPDATE darkapi_delivery_stats SET rejected_attempts=rejected_attempts+1 WHERE device_id=?", e.DeviceID()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -106,7 +209,7 @@ func (e *Exporter) Queue(event Event) error {
 func (e *Exporter) Flush(ctx context.Context) error {
 	e.flushMu.Lock()
 	defer e.flushMu.Unlock()
-	rows, err := e.db.Query("SELECT id,payload FROM darkapi_outbox WHERE device_id=? ORDER BY id LIMIT 100", e.client.DeviceID())
+	rows, err := e.db.Query("SELECT id,payload FROM darkapi_outbox WHERE device_id=? ORDER BY id LIMIT 100", e.DeviceID())
 	if err != nil {
 		return err
 	}
@@ -116,7 +219,7 @@ func (e *Exporter) Flush(ctx context.Context) error {
 	for rows.Next() {
 		var id int64
 		var b []byte
-		if err := rows.Scan(&id, &b); err != nil {
+		if err = rows.Scan(&id, &b); err != nil {
 			rows.Close()
 			return err
 		}
@@ -124,12 +227,12 @@ func (e *Exporter) Flush(ctx context.Context) error {
 			break
 		}
 		var event Event
-		if err := json.Unmarshal(b, &event); err != nil {
+		if err = json.Unmarshal(b, &event); err != nil {
 			rows.Close()
 			return err
 		}
-		ids = append(ids, id)
 		events = append(events, event)
+		ids = append(ids, id)
 		total += len(b)
 	}
 	err = rows.Err()
@@ -140,141 +243,112 @@ func (e *Exporter) Flush(ctx context.Context) error {
 	if len(events) == 0 {
 		return nil
 	}
-	if err := e.client.Send(ctx, events); err != nil {
+	if err = e.client.Send(ctx, events); err == nil {
+		return e.ack(ids)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || !apiErr.Permanent() {
 		return err
 	}
-	// The server's exact ID acknowledgment is verified before deleting only this batch.
-	tx, err := e.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, id := range ids {
-		if _, err := tx.Exec("DELETE FROM darkapi_outbox WHERE id=? AND device_id=?", id, e.client.DeviceID()); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-func Severity(s string) string {
-	switch s {
-	case "critical":
-		return s
-	case "high", "very-high":
-		return "high"
-	case "medium", "med":
-		return "medium"
-	case "low":
-		return s
-	case "warning":
-		return s
-	default:
-		return "info"
-	}
-}
-
-// redact removes credential-bearing fields before upload; it never executes remediation content.
-func redact(data map[string]any) map[string]any {
-	result := make(map[string]any, len(data))
-	for key, value := range data {
-		lower := strings.ToLower(key)
-		if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "token") || strings.Contains(lower, "api_key") || strings.Contains(lower, "private_key") {
-			result[key] = "[redacted]"
+	// Isolate a permanently rejected record; never quarantine credentials, rate
+	// limits, timeouts, server outages or malformed acknowledgment responses.
+	for i, event := range events {
+		if err = e.client.Send(ctx, []Event{event}); err == nil {
+			if err = e.ack([]int64{ids[i]}); err != nil {
+				return err
+			}
 			continue
 		}
-		value = redactValue(value)
-		result[key] = value
-	}
-	return result
-}
-func redactValue(value any) any {
-	switch v := value.(type) {
-	case map[string]any:
-		return redact(v)
-	case []any:
-		result := make([]any, len(v))
-		for i, child := range v {
-			result[i] = redactValue(child)
+		if !errors.As(err, &apiErr) || !apiErr.Permanent() {
+			return err
 		}
-		return result
-	default:
-		return value
-	}
-}
-func (e *Exporter) LogTelemetryEvent(source, eventType, severity, details string) error {
-	if err := e.Manager.LogTelemetryEvent(source, eventType, severity, details); err != nil {
-		return err
-	}
-	data := map[string]any{}
-	if json.Unmarshal([]byte(details), &data) != nil || data == nil {
-		data = map[string]any{"message": details}
-	}
-	if eventType == "" {
-		eventType = "telemetry"
-	}
-	observed := ""
-	for _, key := range []string{"timestamp", "Timestamp", "EndedAt"} {
-		if raw, ok := data[key].(string); ok {
-			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil && !parsed.IsZero() {
-				observed = parsed.UTC().Format(time.RFC3339Nano)
-				break
-			}
-		}
-	}
-	return e.Queue(Event{Event: Evidence{Type: eventType, Source: source, Severity: Severity(severity), Time: observed, Data: redact(data)}})
-}
-func (e *Exporter) SaveCommit(state *core.SecurityState) error {
-	if err := e.Manager.SaveCommit(state); err != nil {
-		return err
-	}
-	for _, finding := range state.Findings {
-		data := map[string]any{"name": finding.Name, "category": finding.Category, "passed": finding.Passed, "current": finding.CurrentVal, "expected": finding.ExpectedVal, "description": finding.Description, "cis_benchmark": finding.CISBenchmark}
-		category := "compliance"
-		name := strings.ToLower(finding.Category + " " + finding.Name)
-		switch {
-		case strings.Contains(name, "patch") || strings.Contains(name, "update"):
-			category = "patches"
-		case strings.Contains(name, "firewall"):
-			category = "firewall"
-		case strings.Contains(name, "intrusion") || strings.Contains(name, "host ids"):
-			category = "host_ids"
-		}
-		if err := e.Queue(Event{Event: Evidence{Type: "posture.finding", Category: category, Source: "aftersec_posture", Severity: Severity(string(finding.Severity)), Time: state.Timestamp.UTC().Format(time.RFC3339Nano), Data: redact(data)}}); err != nil {
+		if err = e.quarantine(ids[i], apiErr.Error()); err != nil {
 			return err
 		}
 	}
 	return nil
 }
+func (e *Exporter) LogTelemetryEvent(source, kind, severity, details string) error {
+	if e.source != nil {
+		return e.Manager.LogTelemetryEvent(source, kind, severity, details)
+	}
+	// Non-replayable managers receive a durable write-ahead copy before delegation.
+	if err := e.Queue(telemetryEvent(source, kind, severity, details, "")); err != nil {
+		return err
+	}
+	return e.Manager.LogTelemetryEvent(source, kind, severity, details)
+}
+func (e *Exporter) SaveCommit(state *core.SecurityState) error {
+	if e.source != nil {
+		return e.Manager.SaveCommit(state)
+	}
+	tx, err := e.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, event := range postureEvents(state) {
+		if err = e.enqueue(tx, event); err != nil {
+			return err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return e.Manager.SaveCommit(state)
+}
 func (e *Exporter) Run(ctx context.Context) {
-	tick := time.NewTicker(30 * time.Second)
+	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
+	var reportAt, nextDelivery time.Time
+	attempt := 0
 	for {
-		var mem runtime.MemStats
-		runtime.ReadMemStats(&mem)
-		if err := e.Queue(Event{Event: Evidence{Type: "agent.resources", Category: "agent_resources", Source: "aftersec_exporter", Severity: "info", Data: map[string]any{"goos": runtime.GOOS, "goarch": runtime.GOARCH, "goroutines": runtime.NumGoroutine(), "heap_bytes": mem.Alloc}}}); err != nil {
-			log.Printf("DarkAPI reporting: %v", err)
+		if ctx.Err() != nil {
+			return
 		}
-		var pending, bytes int64
-		if err := e.db.QueryRow("SELECT COUNT(*),COALESCE(SUM(length(payload)),0) FROM darkapi_outbox WHERE device_id=?", e.DeviceID()).Scan(&pending, &bytes); err == nil {
-			if err = e.Queue(Event{Event: Evidence{Type: "exporter.queue", Category: "monitoring", Source: "aftersec_exporter", Severity: "info", Data: map[string]any{"pending_events": pending, "pending_bytes": bytes, "limit_bytes": e.maxBytes}}}); err != nil {
-				log.Printf("DarkAPI queue metrics: %v", err)
-			}
+		if _, err := e.SyncSource(); err != nil {
+			log.Printf("DarkAPI source retained: %v", err)
 		}
-		if err := e.client.Heartbeat(ctx); err != nil {
-			log.Printf("DarkAPI heartbeat: %v", err)
+		now := time.Now()
+		if !now.Before(reportAt) {
+			var mem runtime.MemStats
+			runtime.ReadMemStats(&mem)
+			if err := e.Queue(Event{Event: Evidence{Type: "agent.resources", Category: "agent_resources", Source: "aftersec_exporter", Severity: "info", Data: map[string]any{"goos": runtime.GOOS, "goarch": runtime.GOARCH, "goroutines": runtime.NumGoroutine(), "heap_bytes": mem.Alloc}}}); err != nil {
+				log.Printf("DarkAPI metrics: %v", err)
+			}
+			if stats, err := e.Stats(); err == nil {
+				if err = e.Queue(Event{Event: Evidence{Type: "exporter.queue", Category: "monitoring", Source: "aftersec_exporter", Severity: "info", Data: stats}}); err != nil {
+					log.Printf("DarkAPI queue metrics: %v", err)
+				}
+			}
+			if err := e.client.Heartbeat(ctx); err != nil {
+				log.Printf("DarkAPI heartbeat: %v", err)
+			}
+			reportAt = now.Add(30 * time.Second)
 		}
-		// Drain up to 2,000 events each cycle; bound work so heartbeats and shutdown remain responsive.
-		for batch := 0; batch < 20; batch++ {
-			if err := e.Flush(ctx); err != nil {
-				log.Printf("DarkAPI export retained for retry: %v", err)
-				break
+		if !now.Before(nextDelivery) {
+			var deliveryErr error
+			for batch := 0; batch < 20 && ctx.Err() == nil; batch++ {
+				if deliveryErr = e.Flush(ctx); deliveryErr != nil {
+					break
+				}
+				var pending int
+				if err := e.db.QueryRow("SELECT COUNT(*) FROM darkapi_outbox WHERE device_id=?", e.DeviceID()).Scan(&pending); err != nil || pending == 0 {
+					break
+				}
 			}
-			var pending int
-			if err := e.db.QueryRow("SELECT COUNT(*) FROM darkapi_outbox WHERE device_id=?", e.DeviceID()).Scan(&pending); err != nil || pending == 0 {
-				break
-			}
-			if ctx.Err() != nil {
-				return
+			if deliveryErr != nil {
+				attempt++
+				var hint time.Duration
+				var apiErr *APIError
+				if errors.As(deliveryErr, &apiErr) {
+					hint = apiErr.RetryAfter
+				}
+				nextDelivery = time.Now().Add(retryDelay(attempt, hint))
+				log.Printf("DarkAPI export retained for retry: %v", deliveryErr)
+			} else {
+				attempt = 0
+				nextDelivery = time.Time{}
 			}
 		}
 		select {
@@ -284,8 +358,6 @@ func (e *Exporter) Run(ctx context.Context) {
 		}
 	}
 }
-
-// FromEnvironment enables reporting only when a protected credential file is explicitly configured.
 func FromEnvironment(manager storage.Manager) (*Exporter, error) {
 	path := os.Getenv("AFTERSEC_DARKAPI_CREDENTIALS")
 	if path == "" {

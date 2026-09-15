@@ -31,14 +31,21 @@ type Event struct {
 	Event   Evidence `json:"event"`
 }
 type Evidence struct {
-	Type          string         `json:"type"`
-	Category      string         `json:"category,omitempty"`
-	Source        string         `json:"source"`
-	Severity      string         `json:"severity"`
-	Time          string         `json:"time"`
-	Data          map[string]any `json:"data"`
-	CorrelationID string         `json:"correlation_id,omitempty"`
-	Entities      map[string]any `json:"entities,omitempty"`
+	SchemaVersion    int            `json:"schema_version,omitempty"`
+	BootID           string         `json:"boot_id,omitempty"`
+	StreamID         string         `json:"stream_id,omitempty"`
+	Sequence         int64          `json:"sequence,omitempty"`
+	AgentVersion     string         `json:"agent_version,omitempty"`
+	CollectionStatus string         `json:"collection_status,omitempty"`
+	Facts            map[string]any `json:"facts,omitempty"`
+	Type             string         `json:"type"`
+	Category         string         `json:"category,omitempty"`
+	Source           string         `json:"source"`
+	Severity         string         `json:"severity"`
+	Time             string         `json:"time"`
+	Data             map[string]any `json:"data"`
+	CorrelationID    string         `json:"correlation_id,omitempty"`
+	Entities         map[string]any `json:"entities,omitempty"`
 }
 
 func NormalizeURL(raw string) (string, error) {
@@ -118,7 +125,7 @@ func (c *Client) request(ctx context.Context, method, path string, body, out any
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("DarkAPI returned HTTP %d", resp.StatusCode)
+		return &APIError{Status: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20+1))
 	if err != nil || len(b) > 4<<20 {
