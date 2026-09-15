@@ -6,6 +6,7 @@ import (
 	"aftersec/pkg/binaryauth"
 	"aftersec/pkg/client"
 	"aftersec/pkg/client/storage"
+	"aftersec/pkg/darkapi"
 	"aftersec/pkg/darkscan"
 	"aftersec/pkg/devicecontrol"
 	"aftersec/pkg/dnsanalytics"
@@ -328,6 +329,25 @@ func main() {
 			log.Fatalf("failed to init local storage: %v", err)
 		}
 		log.Printf("Initialized in STANDALONE mode")
+	}
+
+	if exporter, exportErr := darkapi.FromEnvironment(mgr); exportErr != nil {
+		log.Fatalf("DarkAPI reporting configuration: %v", exportErr)
+	} else if exporter != nil {
+		mgr = exporter
+		if err := exporter.ReportPolicy(map[string]any{
+			"network_sensor": cfg.Daemon.NetworkSensor.Enabled, "dns_sensor": cfg.Daemon.DNSSensor.Enabled,
+			"self_protection": cfg.Daemon.SelfProtection.Enabled, "binary_authorization": cfg.Daemon.BinaryAuth.Enabled,
+			"ransomware": cfg.Daemon.Ransomware.Enabled, "device_control": cfg.Daemon.DeviceControl.Enabled,
+			"strict_mode": cfg.Core.StrictMode, "mode": string(cfg.Mode),
+		}); err != nil {
+			log.Fatalf("DarkAPI policy reporting: %v", err)
+		}
+		reportCtx, cancelReports := context.WithCancel(context.Background())
+		reportsDone := make(chan struct{})
+		go func() { defer close(reportsDone); exporter.Run(reportCtx) }()
+		defer func() { cancelReports(); <-reportsDone; exporter.Close() }()
+		log.Printf("DarkAPI reporting enabled for device %s", exporter.DeviceID())
 	}
 
 	var binaryAuthorizer *binaryauth.Authorizer
