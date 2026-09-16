@@ -1,5 +1,8 @@
 # AfterSec
 
+Platform support and verification limits: [security/platform review](docs/PLATFORM_REVIEW.md). Linux and macOS use the main agent; `./build.sh windows` builds a minimal read-only Defender/firewall scanner.
+
+
 **Next-Generation macOS Endpoint Detection & Response (EDR) with Multi-LLM AI Threat Analysis**
 
 [![License](https://img.shields.io/badge/license-Elastic%202.0-blue.svg)](LICENSE)

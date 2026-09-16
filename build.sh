@@ -1,9 +1,13 @@
 #!/bin/bash
 
-# Set consistent macOS deployment target for all builds
-export MACOSX_DEPLOYMENT_TARGET=11.0
-export CGO_CFLAGS="-mmacosx-version-min=11.0"
-export CGO_LDFLAGS="-mmacosx-version-min=11.0"
+set -euo pipefail
+
+# Apple compiler flags are only valid when targeting macOS.
+if [ "${GOOS:-$(uname -s)}" = "darwin" ] || [ "${GOOS:-$(uname -s)}" = "Darwin" ]; then
+	export MACOSX_DEPLOYMENT_TARGET=11.0
+	export CGO_CFLAGS="${CGO_CFLAGS:-} -mmacosx-version-min=11.0"
+	export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=11.0"
+fi
 
 function clean() {
 	echo "Cleaning..."
@@ -19,6 +23,11 @@ function clean() {
 function cli() {
 	echo "Building CLI..."
 	go build -trimpath -ldflags="-s -w" -o bin/aftersec ./cmd/aftersec
+}
+
+function windows() {
+	echo "Building minimal Windows posture scanner..."
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/aftersec-windows.exe ./cmd/aftersec-windows
 }
 
 function gui() {
@@ -163,9 +172,10 @@ function package() {
 
 mkdir -p bin
 
-case "$1" in
+case "${1:-}" in
 	clean) clean ;;
 	cli) cli ;;
+	windows) windows ;;
 	gui) gui ;;
 	daemon) daemon ;;
 	server) server ;;

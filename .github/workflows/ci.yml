@@ -65,3 +65,17 @@ jobs:
       # Full GUI build requires those headers; run locally or in a release job.
       - name: Vet (darwin, CGO_ENABLED=0)
         run: CGO_ENABLED=0 go vet ./cmd/aftersecd/... ./cmd/aftersec/... ./pkg/...
+
+  windows-minimal:
+    name: Windows minimal posture scanner
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test scanner and compliance executor
+        run: go test ./cmd/aftersec-windows ./pkg/compliance
+      - name: Build minimal scanner
+        run: go build -o aftersec-windows.exe ./cmd/aftersec-windows

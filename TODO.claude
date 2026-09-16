@@ -1,0 +1,185 @@
+# TODO — Code Review Findings (2026-07-28)
+
+Source: code-review-graph analysis at HEAD `c6d419d`, covering the 4 commits
+since the graph was last built (`81d74ea`..`c6d419d`).
+
+Graph run: 104 changed files · 425 changed functions/classes · 348 test gaps ·
+overall risk 0.60. Top hotspots: `validatePack` (0.60), eBPF `remember_socket` /
+`submit_connected` (0.60), `handleAuthEvent` (0.55), `isKnownDoHConnection` (0.55),
+`InspectExecutable` + the three `platformProvenance` variants (0.50).
+
+Review status — September 16, 2026: the working-tree hardening addresses
+findings 1, 2, 4–12. Finding 3 now checks the opened descriptor and rejects
+oversized/changed files, but immutable executable identity across every scanner
+remains future work. Finding 13 remains a diagnostic cleanup. The original
+findings below are retained as historical context; see docs/PLATFORM_REVIEW.md.
+The full macOS Go suite was rerun before merging this work.
+
+---
+
+## Blockers — fail-open in wired security paths
+
+### 1. Detonation verdict fails open on a missing/unknown verdict
+`cmd/aftersec-daemon` → `cmd/aftersecd/main.go:207-221`
+
+Only `result.Verdict == "DENY"` blocks. A server response of `{}`, a truncated
+body, or a lowercase `"deny"` decodes without error, leaves `Verdict == ""`, and
+logs `✅ Server Allowed Execution`. Every other failure on this path already fails
+closed (unreachable server :191, non-200 :197, decode error :222) — this is the
+one hole.
+
+**Fix:** require an explicit `"ALLOW"`; deny everything else.
+
+### 2. YARA phase is the only silently fail-open phase
+`cmd/aftersecd/main.go:131-136`
+
+`if err == nil && isMalicious` — a scan error produces no block, no log, and no
+telemetry. Inconsistent with the fail-closed design of every surrounding phase,
+and invisible to operators.
+
+**Fix:** at minimum log + emit telemetry on scan error; consider a configurable
+fail-closed mode.
+
+### 3. TOCTOU — the hash is not bound to the opened fd
+`pkg/binaryauth/inspect.go:12-32`
+
+`Stat(path)` → `Open(path)` → hash the fd → `Stat(path)`. Both stats observe the
+*path*, never the opened inode. An attacker with write access to the directory
+can leave the malicious binary in place for both stats while swapping in an
+allow-listed binary for the duration of the `Open`, so the returned SHA-256
+belongs to a file that was never validated.
+
+**Fix:** use `file.Stat()` (fstat on the fd) for the comparison so the hash
+provably belongs to the inode that was checked. Ideally authorize by fd/vnode,
+which ES can provide.
+
+### 4. Panic anywhere in `handleAuthEvent` fails open
+`cmd/aftersecd/main.go:96-101`
+
+`allow := true` plus a deferred `RespondAuth` means a panic in any phase unwinds
+through the defer and responds ALLOW.
+
+**Fix:** start at `false` and grant at the end, or add a recover that forces deny.
+
+---
+
+## High
+
+### 5. Hash silently truncates at 16 GiB
+`pkg/binaryauth/inspect.go:21`
+
+`io.LimitReader(file, 1<<34)` returns no error when the limit is hit; two files
+sharing a 16 GiB prefix produce identical identities.
+
+**Fix:** detect the limit being reached and reject.
+
+### 6. `compliance.Runner.Run` hardcodes `Passed: true`
+`pkg/compliance/compliance.go:124`
+
+No exit-code or output evaluation — every control that runs without an executor
+error is attested as passing, and that result is what gets Ed25519-signed into
+evidence.
+
+Latent, not live: `pkg/compliance` has **no callers outside its own tests**
+(verified by grep), and no test covers `Runner.Run`. But the package reads as
+production-ready.
+
+**Fix:** evaluate exit code / output; add tests for the failing-control case.
+Decide whether to wire the package up or mark it explicitly unfinished.
+
+### 7. Enrollment token has no transport guarantee
+`cmd/aftersecd/main.go:179-186`, `pkg/client/config.go:35`
+
+`Address` is a free-form YAML string with no scheme validation; a `http://` value
+leaks the bearer enrollment token in cleartext.
+
+**Fix:** reject non-https at config load.
+
+---
+
+## Medium
+
+### 8. IPv4-mapped addresses defeat DoH detection
+`cmd/aftersecd/network.go:66-74`
+
+`netip.Prefix.Contains` returns false for a 4-in-6 address against a v4 `/32`, by
+design. The Linux eBPF path is safe (`net.IP.String()` unmaps), but the macOS path
+forwards `NWHostEndpoint.hostname` verbatim
+(`macos/AfterSecNetworkExtension/FlowFilterProvider.swift:57`), which can be
+`::ffff:1.1.1.1`. There is no `Unmap()` call anywhere in the repo.
+
+**Fix:** one line — `address = address.Unmap()`.
+
+### 9. DoH detection is TCP-only
+`cmd/aftersecd/network.go:63`
+
+DoH over HTTP/3 (UDP/443) and DoQ (853) are invisible, despite this being the
+"complete DNS analytics" commit.
+
+**Fix:** extend coverage, or document the gap explicitly.
+
+### 10. Inconsistent audit-failure handling
+`cmd/aftersecd/main.go:118-122` vs `:151, :162`
+
+Binary auth blocks when `LogTelemetryEvent` fails; DarkScan discards the same
+call's return value.
+
+**Fix:** pick one policy and apply it uniformly.
+
+### 11. `VerifyPack` can't re-verify the installed pack
+`pkg/compliance/compliance.go:79`
+
+`Version <= activeVersion → ErrRollback` means re-validating the currently active
+pack (version == active) always errors — e.g. on daemon restart.
+
+**Fix:** use `<`, or add a separate re-validation entry point.
+
+---
+
+## Minor
+
+### 12. Nil error wrapped with `%w`
+`pkg/binaryauth/inspect.go:14`
+
+The non-regular-file case wraps a nil error, producing
+`stat executable: %!w(<nil>)` and an `errors.Unwrap` of nil.
+
+**Fix:** split the two conditions.
+
+### 13. Dead compression-pointer check
+`pkg/dnsanalytics/wire.go:53`
+
+`length&0xc0 != 0` is unreachable after `length > 63`. Pointers are rejected, but
+the distinct "compression pointer" diagnostic is lost.
+
+**Fix:** reorder so pointers get their own error, or drop the redundant clause.
+
+---
+
+## Test coverage
+
+The graph reports 348 test gaps. Every daemon-glue function it flagged has zero
+tests — and that is exactly where findings 1, 2, 4 and 10 live:
+
+- `handleAuthEvent` (`cmd/aftersecd/main.go:92`)
+- `persistNetworkFlows` (`cmd/aftersecd/network.go:19`)
+- `isKnownDoHConnection` (`cmd/aftersecd/network.go:62`)
+- `persistDNSQueries` (`cmd/aftersecd/dns.go:16`)
+- `RunEnterprise` (`cmd/aftersecd/modes/enterprise.go:24`)
+- `compliance.Runner.Run` (`pkg/compliance/compliance.go:111`)
+
+Per the repo security rules, the fixes above need negative tests: rejects
+tampered / swapped / oversized / unknown-verdict input, and fails closed.
+
+---
+
+## Tooling notes
+
+- `list_graph_stats_tool` fails with `name 'torch' is not defined` — the local
+  embedding provider is not installed correctly. Semantic search will fall back to
+  FTS/keyword until that is fixed (`pip install code-review-graph[embeddings]`).
+- The graph reported `flows_detected: 0` and `communities_detected: 0`, so
+  `get_affected_flows` and the community/architecture tools return nothing useful
+  for this repo right now.
+- The graph was 3 commits stale before this run. Worth checking the auto-update
+  hook is actually firing.
