@@ -5,12 +5,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 
 	grpcapi "aftersec/pkg/api/grpc"
 )
@@ -59,7 +59,7 @@ type EnterpriseClient struct {
 
 // NewEnterpriseClient initializes a connection to the management server
 func NewEnterpriseClient(cfg *ClientConfig) (*EnterpriseClient, error) {
-	if cfg.Server.Address == "" {
+	if cfg == nil || cfg.Server == nil || cfg.Server.Address == "" {
 		return nil, fmt.Errorf("management server address is not configured")
 	}
 
@@ -73,7 +73,7 @@ func NewEnterpriseClient(cfg *ClientConfig) (*EnterpriseClient, error) {
 		creds := credentials.NewTLS(tlsConfig)
 		opts = append(opts, grpc.WithTransportCredentials(creds))
 	} else {
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		return nil, fmt.Errorf("management TLS CA is required; cleartext enrollment is disabled")
 	}
 
 	// Add timeout for connection dialing
@@ -173,4 +173,17 @@ func (c *EnterpriseClient) StreamTelemetryBatch(ctx context.Context, tenantID, h
 		return 0, err
 	}
 	return ack.EventsProcessed, nil
+}
+
+// NewManagementHTTPClient uses the same verified identity and roots as gRPC.
+func NewManagementHTTPClient(cfg TLSConfig) (*http.Client, error) {
+	tlsConfig, err := buildClientTLSConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
+	return &http.Client{Transport: transport, Timeout: 45 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}, nil
 }

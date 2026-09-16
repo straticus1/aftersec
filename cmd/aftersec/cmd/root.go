@@ -10,10 +10,10 @@ import (
 )
 
 var (
-	cfgFile    string
-	outputFmt  string
-	globalCfg  *client.ClientConfig
-	globalMgr  storage.Manager
+	cfgFile   string
+	outputFmt string
+	globalCfg *client.ClientConfig
+	globalMgr storage.Manager
 )
 
 var rootCmd = &cobra.Command{
@@ -30,8 +30,7 @@ var rootCmd = &cobra.Command{
 		}
 
 		if err != nil {
-			fmt.Printf("Warning: failed to load config (%v), falling back to default\n", err)
-			globalCfg = client.DefaultClientConfig()
+			return fmt.Errorf("load configuration: %w", err)
 		}
 
 		if globalCfg.Mode == client.ModeEnterprise {

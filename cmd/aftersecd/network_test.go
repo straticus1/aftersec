@@ -74,3 +74,23 @@ func TestPersistNetworkFlowsSurfacesStorageFailure(t *testing.T) {
 		t.Fatal("expected storage failure")
 	}
 }
+
+func TestEncryptedDNSMappedAndQUIC(t *testing.T) {
+	for _, tc := range []struct {
+		address, protocol string
+		port              uint16
+		want              bool
+	}{
+		{"::ffff:1.1.1.1", "tcp", 443, true},
+		{"1.1.1.1", "udp", 443, true},
+		{"1.1.1.1", "udp", 853, true},
+		{"1.1.1.1", "tcp", 80, false},
+		{"203.0.113.8", "udp", 443, false},
+	} {
+		flow := attributedFlow()
+		flow.RemoteAddress, flow.Protocol, flow.RemotePort = tc.address, tc.protocol, tc.port
+		if got := isKnownDoHConnection(flow); got != tc.want {
+			t.Errorf("%+v: got %v", tc, got)
+		}
+	}
+}

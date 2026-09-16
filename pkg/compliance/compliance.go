@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"time"
 )
 
@@ -76,7 +77,7 @@ func VerifyPack(signed SignedPack, publicKey ed25519.PublicKey, activeVersion ui
 	if err := validatePack(signed.Pack); err != nil {
 		return err
 	}
-	if signed.Pack.Version <= activeVersion {
+	if signed.Pack.Version < activeVersion {
 		return ErrRollback
 	}
 	if !signed.Pack.ExpiresAt.IsZero() && !now.Before(signed.Pack.ExpiresAt) {
@@ -92,6 +93,8 @@ func VerifyPack(signed SignedPack, publicKey ed25519.PublicKey, activeVersion ui
 	return nil
 }
 
+// Executor must return an *exec.ExitError for a nonzero control exit status.
+// A control passes only with exit status zero; stdout is retained as evidence.
 type Executor interface {
 	Run(context.Context, []string, int) ([]byte, error)
 }
@@ -115,11 +118,18 @@ func (r Runner) Run(ctx context.Context, control Control) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 	output, err := r.Executor.Run(ctx, append([]string(nil), control.Command...), r.MaxOutputBytes)
-	if err != nil {
-		return Result{}, fmt.Errorf("run control %s: %w", control.ID, err)
+	if ctx.Err() != nil {
+		return Result{}, ctx.Err()
 	}
 	if len(output) > r.MaxOutputBytes {
 		return Result{}, ErrOutputTooLarge
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return Result{ControlID: control.ID, Passed: false, Raw: string(output)}, nil
+	}
+	if err != nil {
+		return Result{}, fmt.Errorf("run control %s: %w", control.ID, err)
 	}
 	return Result{ControlID: control.ID, Passed: true, Raw: string(output)}, nil
 }

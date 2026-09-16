@@ -5,8 +5,10 @@ import (
 	"aftersec/pkg/darkscan"
 	"aftersec/pkg/threatintel"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -32,6 +34,7 @@ type TLSConfig struct {
 }
 
 type ServerConfig struct {
+	DetonationAddress     string    `yaml:"detonation_address"`
 	Address               string    `yaml:"address"`
 	TLS                   TLSConfig `yaml:"tls"`
 	EnrollmentToken       string    `yaml:"enrollment_token"`
@@ -314,6 +317,18 @@ func LoadConfig(path string) (*ClientConfig, error) {
 		return nil, fmt.Errorf("invalid operation mode: %s", cfg.Mode)
 	}
 
+	if cfg.Server != nil {
+		if strings.Contains(cfg.Server.Address, "://") {
+			if _, err := secureHTTPURL(cfg.Server.Address); err != nil {
+				return nil, err
+			}
+		}
+		if cfg.Server.DetonationAddress != "" {
+			if _, err := secureHTTPURL(cfg.Server.DetonationAddress); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return cfg, nil
 }
 
@@ -324,4 +339,29 @@ func SaveConfig(cfg *ClientConfig, path string) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+// DetonationURL returns the HTTPS REST endpoint, separate from the gRPC target.
+func DetonationURL(cfg *ServerConfig) (string, error) {
+	if cfg == nil {
+		return "", fmt.Errorf("server is required")
+	}
+	address := cfg.DetonationAddress
+	if address == "" {
+		address = cfg.Address
+	}
+	u, err := secureHTTPURL(address)
+	if err != nil {
+		return "", err
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/detonate"
+	return u.String(), nil
+}
+
+func secureHTTPURL(address string) (*url.URL, error) {
+	u, err := url.Parse(address)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("management REST address must be an HTTPS URL without credentials, query, or fragment")
+	}
+	return u, nil
 }

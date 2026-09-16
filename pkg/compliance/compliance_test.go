@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -30,7 +31,7 @@ func TestVerifyPackRejectsTamperingAndRollback(t *testing.T) {
 		t.Fatalf("VerifyPack() error = %v", err)
 	}
 	signed, _ = SignPack(pack, priv)
-	if err := VerifyPack(signed, pub, 2, time.Now()); !errors.Is(err, ErrRollback) {
+	if err := VerifyPack(signed, pub, 3, time.Now()); !errors.Is(err, ErrRollback) {
 		t.Fatalf("VerifyPack() rollback error = %v", err)
 	}
 }
@@ -64,5 +65,23 @@ func TestEvidenceSignatureRejectsTamperingAndWrongKey(t *testing.T) {
 	signed.Bundle.Results[0].Raw = "changed"
 	if err := VerifyEvidence(signed, pub); !errors.Is(err, ErrInvalidSignature) {
 		t.Fatalf("tamper error = %v", err)
+	}
+}
+
+func TestRunnerRecordsFailedControl(t *testing.T) {
+	r := Runner{Executor: execFunc(func(context.Context, []string, int) ([]byte, error) { return []byte("insecure"), &exec.ExitError{} }), Timeout: time.Second, MaxOutputBytes: 100}
+	got, err := r.Run(context.Background(), Control{ID: "1", Command: []string{"check"}})
+	if err != nil || got.Passed || got.ControlID != "1" || got.Raw != "insecure" {
+		t.Fatalf("%+v: %v", got, err)
+	}
+}
+func TestActivePackCanBeReverified(t *testing.T) {
+	pub, priv := keypair(t)
+	signed, err := SignPack(Pack{Version: 2, Platform: "linux", Controls: []Control{{ID: "1", Title: "check", Command: []string{"check"}}}}, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPack(signed, pub, 2, time.Now()); err != nil {
+		t.Fatal(err)
 	}
 }

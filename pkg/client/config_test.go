@@ -72,3 +72,26 @@ server:
 		t.Errorf("expected server address %s, got %v", "localhost:8443", cfg.Server)
 	}
 }
+
+func TestDetonationURLRequiresHTTPS(t *testing.T) {
+	for _, address := range []string{"http://example.com", "localhost:9090", "https://user:pass@example.com", "https://example.com?q=x", "https://"} {
+		if _, err := DetonationURL(&ServerConfig{DetonationAddress: address}); err == nil {
+			t.Errorf("accepted %q", address)
+		}
+	}
+	got, err := DetonationURL(&ServerConfig{Address: "localhost:9090", DetonationAddress: "https://example.com/"})
+	if err != nil || got != "https://example.com/api/v1/detonate" {
+		t.Fatalf("%s, %v", got, err)
+	}
+}
+
+func TestLoadConfigRejectsCleartextREST(t *testing.T) {
+	t.Setenv("AFTERSEC_MODE", "")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  address: http://example.com\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("accepted cleartext REST")
+	}
+}

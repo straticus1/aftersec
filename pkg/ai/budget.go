@@ -38,9 +38,9 @@ var modelPricing = map[string]struct {
 	InputCostPerM  float64
 	OutputCostPerM float64
 }{
-	"gpt-4o-mini":               {InputCostPerM: 0.15, OutputCostPerM: 0.60},
-	"claude-3-5-sonnet-latest":  {InputCostPerM: 3.00, OutputCostPerM: 15.00},
-	"gemini-2.5-flash":          {InputCostPerM: 0.075, OutputCostPerM: 0.30},
+	"gpt-4o-mini":              {InputCostPerM: 0.15, OutputCostPerM: 0.60},
+	"claude-3-5-sonnet-latest": {InputCostPerM: 3.00, OutputCostPerM: 15.00},
+	"gemini-2.5-flash":         {InputCostPerM: 0.075, OutputCostPerM: 0.30},
 }
 
 // NewBudgetTracker creates a new budget tracker with daily and monthly limits
@@ -59,8 +59,8 @@ func NewBudgetTracker(dailyLimit, monthlyLimit float64) *BudgetTracker {
 
 // CheckBudget returns an error if budget is exceeded
 func (bt *BudgetTracker) CheckBudget(ctx context.Context) error {
-	bt.mu.RLock()
-	defer bt.mu.RUnlock()
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
 
 	bt.resetIfNeeded()
 
@@ -77,6 +77,9 @@ func (bt *BudgetTracker) CheckBudget(ctx context.Context) error {
 
 // RecordUsage records API usage and calculates cost
 func (bt *BudgetTracker) RecordUsage(model string, tokensIn, tokensOut int64) error {
+	if tokensIn < 0 || tokensOut < 0 {
+		return fmt.Errorf("token usage cannot be negative")
+	}
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 
@@ -111,22 +114,22 @@ func (bt *BudgetTracker) RecordUsage(model string, tokensIn, tokensOut int64) er
 
 // GetStats returns current budget statistics
 func (bt *BudgetTracker) GetStats() map[string]interface{} {
-	bt.mu.RLock()
-	defer bt.mu.RUnlock()
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
 
 	bt.resetIfNeeded()
 
 	stats := map[string]interface{}{
-		"daily_limit":        bt.dailyLimit,
-		"daily_spend":        bt.dailySpend,
-		"daily_remaining":    bt.dailyLimit - bt.dailySpend,
-		"daily_percent_used": (bt.dailySpend / bt.dailyLimit) * 100,
-		"monthly_limit":      bt.monthlyLimit,
-		"monthly_spend":      bt.monthlySpend,
-		"monthly_remaining":  bt.monthlyLimit - bt.monthlySpend,
+		"daily_limit":          bt.dailyLimit,
+		"daily_spend":          bt.dailySpend,
+		"daily_remaining":      bt.dailyLimit - bt.dailySpend,
+		"daily_percent_used":   (bt.dailySpend / bt.dailyLimit) * 100,
+		"monthly_limit":        bt.monthlyLimit,
+		"monthly_spend":        bt.monthlySpend,
+		"monthly_remaining":    bt.monthlyLimit - bt.monthlySpend,
 		"monthly_percent_used": (bt.monthlySpend / bt.monthlyLimit) * 100,
-		"last_reset":         bt.lastReset,
-		"month_start":        bt.monthStart,
+		"last_reset":           bt.lastReset,
+		"month_start":          bt.monthStart,
 	}
 
 	// Add per-model stats
@@ -189,12 +192,12 @@ func GetBudgetTracker() *BudgetTracker {
 type CircuitBreaker struct {
 	mu sync.RWMutex
 
-	name           string
-	maxFailures    int
-	resetTimeout   time.Duration
-	state          CircuitState
-	failures       int
-	lastFailTime   time.Time
+	name            string
+	maxFailures     int
+	resetTimeout    time.Duration
+	state           CircuitState
+	failures        int
+	lastFailTime    time.Time
 	consecutiveFail int
 }
 
@@ -202,8 +205,8 @@ type CircuitBreaker struct {
 type CircuitState string
 
 const (
-	StateClosed   CircuitState = "closed"   // Normal operation
-	StateOpen     CircuitState = "open"     // Failing, rejecting requests
+	StateClosed   CircuitState = "closed"    // Normal operation
+	StateOpen     CircuitState = "open"      // Failing, rejecting requests
 	StateHalfOpen CircuitState = "half-open" // Testing if service recovered
 )
 

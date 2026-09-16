@@ -60,13 +60,14 @@ var knownDoHNetworks = []netip.Prefix{
 }
 
 func isKnownDoHConnection(flow netsensor.Flow) bool {
-	if flow.Protocol != "tcp" || flow.RemotePort != 443 {
+	if (flow.Protocol != "tcp" && flow.Protocol != "udp") || (flow.RemotePort != 443 && flow.RemotePort != 853) {
 		return false
 	}
 	address, err := netip.ParseAddr(flow.RemoteAddress)
 	if err != nil {
 		return false
 	}
+	address = address.Unmap()
 	for _, network := range knownDoHNetworks {
 		if network.Contains(address) {
 			return true

@@ -90,13 +90,19 @@ func forensicsWorker(ctx context.Context, id int, mgr storage.Manager, queue <-c
 	}
 }
 
-func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *client.ClientConfig, mgr storage.Manager, authorizer *binaryauth.Authorizer, dsClient interface {
+func handleAuthEvent(event edr.ProcessEvent, consumer interface {
+	RespondAuth(edr.ProcessEvent, bool, bool) error
+}, cfg *client.ClientConfig, mgr storage.Manager, authorizer *binaryauth.Authorizer, dsClient interface {
 	RealTimeScan(ctx context.Context, path string, timeoutSeconds int) (bool, darkscan.ThreatLevel, error)
 	IsEnabled() bool
 }) {
-	allow := true
+	allow := false
 	defer func() {
-		if err := consumer.RespondAuth(event, allow, true); err != nil {
+		if recovered := recover(); recovered != nil {
+			allow = false
+			log.Printf("AUTH_EXEC panic; denying %s: %v", event.ExecPath, recovered)
+		}
+		if err := consumer.RespondAuth(event, allow, false); err != nil {
 			log.Printf("Failed to respond to AUTH_EXEC for %s: %v", event.ExecPath, err)
 		}
 	}()
@@ -130,7 +136,14 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 
 	// Phase 1: Local YARA Sandboxing
 	isMalicious, err := plugins.ScanYara(mgr, event.ExecPath)
-	if err == nil && isMalicious {
+	if err != nil {
+		log.Printf("[YARA] Scan failed; denying %s: %v", event.ExecPath, err)
+		if auditErr := mgr.LogTelemetryEvent("yara_engine", "scan_error", "critical", err.Error()); auditErr != nil {
+			log.Printf("[YARA] Audit failed: %v", auditErr)
+		}
+		return
+	}
+	if isMalicious {
 		allow = false
 		log.Printf("🛑 [LOCAL YARA ENGINE] Blocked execution: %s", event.ExecPath)
 		return // Skip cloud detonation, already convicted
@@ -149,7 +162,11 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 		} else if shouldBlock {
 			allow = false
 			log.Printf("🛑 [DARKSCAN] Blocked execution: %s (Threat Level: %s)", event.ExecPath, threatLevel)
-			mgr.LogTelemetryEvent("darkscan", "blocked_execution", "critical", fmt.Sprintf(`{"path": "%s", "threat_level": "%s"}`, event.ExecPath, threatLevel))
+			record, _ := json.Marshal(map[string]any{"path": event.ExecPath, "threat_level": threatLevel})
+			if err := mgr.LogTelemetryEvent("darkscan", "blocked_execution", "critical", string(record)); err != nil {
+				log.Printf("[DARKSCAN] Audit failed: %v", err)
+				return
+			}
 
 			// Deploy local immunity
 			go func(path string) {
@@ -160,12 +177,22 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 			return
 		} else if threatLevel > darkscan.ThreatLevelNone {
 			log.Printf("⚠️ [DARKSCAN] Suspicious file allowed: %s (Threat Level: %s)", event.ExecPath, threatLevel)
-			mgr.LogTelemetryEvent("darkscan", "suspicious_allowed", "high", fmt.Sprintf(`{"path": "%s", "threat_level": "%s"}`, event.ExecPath, threatLevel))
+			record, _ := json.Marshal(map[string]any{"path": event.ExecPath, "threat_level": threatLevel})
+			if err := mgr.LogTelemetryEvent("darkscan", "suspicious_allowed", "high", string(record)); err != nil {
+				log.Printf("[DARKSCAN] Audit failed: %v", err)
+				return
+			}
 		}
 	}
 
 	// Phase 2: Cloud Detonation Engine (enterprise enforcement only).
-	if cfg.Server == nil || cfg.Server.Address == "" || cfg.Mode != client.ModeEnterprise {
+	if cfg.Mode != client.ModeEnterprise {
+		allow = true
+		return
+	}
+
+	if cfg.Server == nil || cfg.Server.Address == "" {
+		log.Printf("[DETONATION] Enterprise server is missing; denying execution")
 		return
 	}
 
@@ -177,7 +204,11 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 	}
 	defer f.Close()
 
-	urlStr := fmt.Sprintf("%s/api/v1/detonate", cfg.Server.Address)
+	urlStr, err := client.DetonationURL(cfg.Server)
+	if err != nil {
+		log.Printf("[DETONATION] Invalid server URL: %v", err)
+		return
+	}
 	req, err := http.NewRequest("POST", urlStr, f)
 	if err != nil {
 		allow = false
@@ -187,7 +218,12 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 	req.Header.Set("Authorization", "Bearer "+cfg.Server.EnrollmentToken)
 
 	// ESF imposes a 60s max stall; we time out slightly earlier to allow fallback
-	httpClient := &http.Client{Timeout: 45 * time.Second}
+	httpClient, err := client.NewManagementHTTPClient(cfg.Server.TLS)
+	if err != nil {
+		log.Printf("[DETONATION] Invalid TLS configuration: %v", err)
+		return
+	}
+	defer httpClient.CloseIdleConnections()
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		allow = false
@@ -201,12 +237,9 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 		return
 	}
 
-	var result struct {
-		Verdict string `json:"verdict"`
-		Score   int    `json:"score"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
-		if result.Verdict == "DENY" {
+	result, verdictErr := decodeDetonationVerdict(resp.Body)
+	if err := verdictErr; err == nil {
+		if result.Verdict != "ALLOW" {
 			allow = false
 			log.Printf("🛑 [DETONATION] SERVER BLOCKED EXECUTION: %s (Score: %d)", event.ExecPath, result.Score)
 
@@ -218,6 +251,7 @@ func handleAuthEvent(event edr.ProcessEvent, consumer *edr.ESConsumer, cfg *clie
 				}
 			}(event.ExecPath, result.Score)
 		} else {
+			allow = true
 			log.Printf("✅ [DETONATION] Server Allowed Execution: %s", event.ExecPath)
 		}
 	} else {
@@ -253,8 +287,7 @@ func main() {
 
 	cfg, err := client.LoadConfig(configPath)
 	if err != nil {
-		log.Printf("Warning: failed to load config (%v), falling back to default standalone config", err)
-		cfg = client.DefaultClientConfig()
+		log.Fatalf("invalid daemon configuration: %v", err)
 	}
 	if edrStartupErr != nil &&
 		(cfg.Daemon.SelfProtection.Required || cfg.Daemon.Ransomware.Required ||

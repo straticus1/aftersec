@@ -42,3 +42,11 @@ func TestClientTLSMinimumVersionIsTLS13(t *testing.T) {
 		t.Fatalf("minimum TLS version = %x, want TLS 1.3", clientTLSMinimumVersion)
 	}
 }
+
+func TestEnterpriseClientRejectsMissingConfigAndCleartext(t *testing.T) {
+	for _, cfg := range []*ClientConfig{nil, {}, {Server: &ServerConfig{Address: "localhost:9090", EnrollmentToken: "secret"}}} {
+		if _, err := NewEnterpriseClient(cfg); err == nil {
+			t.Fatal("accepted missing or cleartext config")
+		}
+	}
+}

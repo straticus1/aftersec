@@ -61,30 +61,8 @@ func TriggerLocalTraining(_ context.Context) error {
 		return fmt.Errorf("EndpointAI is disabled or not initialized")
 	}
 
-	log.Println("[EndpointAI] Initializing local unsupervised training epoch...")
-	time.Sleep(3 * time.Second)
+	return fmt.Errorf("local training is unavailable in the heuristic backend; use an externally trained model with the onnxruntime build")
 
-	localAI.mu.Lock()
-	defer localAI.mu.Unlock()
-
-	if localAI.samples == 0 {
-		return fmt.Errorf("no observations recorded: system must be in 'observing' mode to collect telemetry prior to training")
-	}
-
-	log.Printf("[EndpointAI] Synthesizing sequence embeddings over %d recorded observations.\n", localAI.samples)
-	time.Sleep(2 * time.Second)
-
-	log.Printf("[EndpointAI] Successfully compiled and serialized local model weights to: %s\n", localAI.cfg.LocalModelPath)
-
-	localAI.samples = 0
-	localAI.lastTrained = time.Now()
-
-	if localAI.cfg.Mode == client.ModeObserving {
-		localAI.cfg.Mode = client.ModeEnforcing
-		log.Println("[EndpointAI] Transitioning Engine state: OBSERVING -> ENFORCING.")
-	}
-
-	return nil
 }
 
 func AssessAnomaly(processName string, telemetryContext string) float32 {
