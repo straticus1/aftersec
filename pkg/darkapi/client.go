@@ -80,6 +80,9 @@ func Load(path string) (*Client, error) {
 	if info.Size() > 16384 || !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0) {
 		return nil, fmt.Errorf("credential file must be a private regular file")
 	}
+	if err := checkCredentialPermissions(path, info); err != nil {
+		return nil, err
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -174,6 +177,10 @@ func (c *Client) Enroll(ctx context.Context, token, path, version string) error 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return fmt.Errorf("enrolled but could not save credentials: %w", err)
+	}
+	if err = secureCredentialFile(path); err != nil {
+		f.Close()
+		return err
 	}
 	if _, err = f.Write(data); err == nil {
 		err = f.Sync()

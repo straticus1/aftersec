@@ -3,6 +3,7 @@ package darkapi
 import (
 	"aftersec/pkg/client/storage"
 	"aftersec/pkg/core"
+	"aftersec/pkg/endpointreport"
 	"aftersec/pkg/reportmeta"
 	"context"
 	"database/sql"
@@ -22,12 +23,12 @@ import (
 // The original enterprise exporter's acknowledged/synced fields are never changed.
 type Exporter struct {
 	storage.Manager
-	db                            *sql.DB
-	client                        *Client
-	source                        storage.ReportingSource
-	sourceID, streamID            string
-	mu, flushMu, policyMu, syncMu sync.Mutex
-	maxBytes                      int64
+	db                                       *sql.DB
+	client                                   *Client
+	source                                   storage.ReportingSource
+	sourceID, streamID                       string
+	mu, flushMu, policyMu, syncMu, commandMu sync.Mutex
+	maxBytes                                 int64
 }
 
 func Open(manager storage.Manager, client *Client, path string) (*Exporter, error) {
@@ -72,6 +73,9 @@ func Open(manager storage.Manager, client *Client, path string) (*Exporter, erro
 }
 func (e *Exporter) initialize() error {
 	for _, q := range []string{
+		`CREATE TABLE IF NOT EXISTS darkapi_sensor_progress(sensor TEXT PRIMARY KEY,state TEXT NOT NULL,last_event TEXT NOT NULL,collected INTEGER NOT NULL,errors INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS darkapi_sensor_config(sensor TEXT PRIMARY KEY,enabled INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS darkapi_command_results(id TEXT PRIMARY KEY,action TEXT NOT NULL,result BLOB NOT NULL,status TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS darkapi_outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,device_id TEXT NOT NULL,event_id TEXT NOT NULL UNIQUE,payload BLOB NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS darkapi_quarantine(event_id TEXT PRIMARY KEY,device_id TEXT NOT NULL,payload BLOB NOT NULL,reason TEXT NOT NULL,created_at TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS darkapi_source_bindings(source_id TEXT PRIMARY KEY,device_id TEXT NOT NULL)`,
@@ -311,6 +315,12 @@ func (e *Exporter) Run(ctx context.Context) {
 		}
 		now := time.Now()
 		if !now.Before(reportAt) {
+			if err := e.ReportCoverage(ctx, endpointreport.Collect); err != nil {
+				log.Printf("DarkAPI coverage: %v", err)
+			}
+			if err := e.PollCommands(ctx); err != nil {
+				log.Printf("DarkAPI commands: %v", err)
+			}
 			var mem runtime.MemStats
 			runtime.ReadMemStats(&mem)
 			if err := e.Queue(Event{Event: Evidence{Type: "agent.resources", Category: "agent_resources", Source: "aftersec_exporter", Severity: "info", Data: map[string]any{"goos": runtime.GOOS, "goarch": runtime.GOARCH, "goroutines": runtime.NumGoroutine(), "heap_bytes": mem.Alloc}}}); err != nil {

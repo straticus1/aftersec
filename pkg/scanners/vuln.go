@@ -32,6 +32,8 @@ func ScanVulnerabilities(addFinding func(core.Finding)) {
 			}
 			addFinding(core.Finding{
 				Category:          "Patch Management",
+				Entities:          map[string]any{"package": map[string]any{"name": pkg.Name, "version": pkg.Version}},
+				Facts:             map[string]any{"package_vulnerable": true},
 				Name:              fmt.Sprintf("[%s] %s outdated", mgr.Name(), pkg.Name),
 				Description:       fmt.Sprintf("Installed: %s, Latest: %s", pkg.Version, pkg.LatestVersion),
 				Severity:          patchmgr.CVESeverity(pkg.CVEs),

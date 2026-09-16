@@ -44,3 +44,9 @@ func (m *CacheManager) ReportingJournal(after int64, limit int) ([]eventjournal.
 func (m *CacheManager) ReportingCommits(after int64, limit int) ([]map[string]any, error) {
 	return m.local.ReportingCommits(after, limit)
 }
+
+// Counters are scoped to this process lifetime; write failures include projection errors.
+func (m *SQLiteManager) ReportingHealth() map[string]any {
+	return map[string]any{"generated_attempts": m.reportAttempts.Load(), "journal_persisted": m.reportPersisted.Load(), "write_errors": m.reportFailures.Load()}
+}
+func (m *CacheManager) ReportingHealth() map[string]any { return m.local.ReportingHealth() }

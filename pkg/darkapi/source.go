@@ -61,7 +61,7 @@ func postureEvents(state *core.SecurityState) []Event {
 		case strings.Contains(name, "intrusion") || strings.Contains(name, "host ids"):
 			category = "host_ids"
 		}
-		events = append(events, Event{Event: Evidence{Type: "posture.finding", Category: category, Source: "aftersec_posture", Severity: Severity(string(finding.Severity)), Time: state.Timestamp.UTC().Format(time.RFC3339Nano), Data: redact(data)}})
+		events = append(events, Event{Event: Evidence{Type: "posture.finding", Category: category, Source: "aftersec_posture", Severity: Severity(string(finding.Severity)), Time: state.Timestamp.UTC().Format(time.RFC3339Nano), Data: redact(data), Entities: finding.Entities, Facts: finding.Facts}})
 	}
 	return events
 }
@@ -132,6 +132,9 @@ func (e *Exporter) SyncSource() (int, error) {
 		event.Event.AgentVersion = saved.AgentVersion
 		event.Event.CollectionStatus = "observed"
 		if err = e.enqueue(tx, event); err != nil {
+			return 0, err
+		}
+		if err = e.progress(tx, event); err != nil {
 			return 0, err
 		}
 		journalCursor = record.Sequence

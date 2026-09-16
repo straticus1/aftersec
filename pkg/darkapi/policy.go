@@ -13,6 +13,9 @@ import (
 func (e *Exporter) ReportPolicy(policy map[string]any) error {
 	e.policyMu.Lock()
 	defer e.policyMu.Unlock()
+	if err := e.configuredSensors(policy); err != nil {
+		return err
+	}
 	safe := redact(policy)
 	payload, err := json.Marshal(safe)
 	if err != nil {

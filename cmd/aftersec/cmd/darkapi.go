@@ -37,6 +37,13 @@ func init() {
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(cfg)
 	}})
+	cloud.AddCommand(&cobra.Command{Use: "rotate", Short: "Rotate the device credential safely; restart aftersecd afterward", RunE: func(cmd *cobra.Command, _ []string) error {
+		if err := darkapi.RotateCredentials(cmd.Context(), path); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "Credential rotated. Restart aftersecd to load it.")
+		return nil
+	}})
 	openQueue := func() (*darkapi.Exporter, error) {
 		client, err := darkapi.Load(path)
 		if err != nil {

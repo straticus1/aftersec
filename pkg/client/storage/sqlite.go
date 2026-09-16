@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"aftersec/pkg/core"
@@ -17,10 +18,13 @@ import (
 )
 
 type SQLiteManager struct {
-	db           *sql.DB
-	eventJournal *eventjournal.Journal
-	baseDir      string
-	mu           sync.RWMutex
+	reportAttempts  atomic.Uint64
+	reportPersisted atomic.Uint64
+	reportFailures  atomic.Uint64
+	db              *sql.DB
+	eventJournal    *eventjournal.Journal
+	baseDir         string
+	mu              sync.RWMutex
 }
 
 func NewSQLiteManager(baseDir string) (*SQLiteManager, error) {
@@ -216,7 +220,13 @@ func (m *SQLiteManager) SaveConfig(cfg *core.Config) error {
 	return err
 }
 
-func (m *SQLiteManager) LogTelemetryEvent(source, eventType, severity, details string) error {
+func (m *SQLiteManager) LogTelemetryEvent(source, eventType, severity, details string) (resultErr error) {
+	m.reportAttempts.Add(1)
+	defer func() {
+		if resultErr != nil {
+			m.reportFailures.Add(1)
+		}
+	}()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -240,6 +250,7 @@ func (m *SQLiteManager) LogTelemetryEvent(source, eventType, severity, details s
 	if err != nil {
 		return fmt.Errorf("append telemetry journal: %w", err)
 	}
+	m.reportPersisted.Add(1)
 	_, err = m.db.Exec("INSERT INTO telemetry_events (timestamp, source, event_type, severity, details, journal_sequence) VALUES (?, ?, ?, ?, ?, ?)",
 		timestamp, source, eventType, severity, details, record.Sequence)
 	return err
