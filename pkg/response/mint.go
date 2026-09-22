@@ -50,7 +50,7 @@ func (m *ActionMinter) Mint(ctx context.Context, r MintRequest) (string, error) 
 func roleAllows(role string, a Action) bool {
 	switch role {
 	case "admin":
-		return a == ActionKillProcess || a == ActionCollectFile || a == ActionReadMemory || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine
+		return a == ActionKillProcess || a == ActionCollectFile || a == ActionReadMemory || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine || a == ActionBreakGlass
 	case "security_operator":
 		return a == ActionKillProcess || a == ActionCollectFile || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine
 	}

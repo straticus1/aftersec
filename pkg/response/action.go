@@ -19,6 +19,7 @@ const (
 	ActionListPersistence Action = "list_persistence"
 	ActionQuarantine      Action = "quarantine"
 	ActionReleaseQuarantine Action = "release_quarantine"
+	ActionBreakGlass        Action = "break_glass"
 )
 
 type ActionClaims struct {
@@ -112,7 +113,7 @@ func validClaims(c ActionClaims) bool {
 		return false
 	}
 	switch c.Action {
-	case ActionKillProcess, ActionCollectFile, ActionReadMemory, ActionListPersistence, ActionQuarantine, ActionReleaseQuarantine:
+	case ActionKillProcess, ActionCollectFile, ActionReadMemory, ActionListPersistence, ActionQuarantine, ActionReleaseQuarantine, ActionBreakGlass:
 		if len(c.Arguments) > 16 {
 			return false
 		}

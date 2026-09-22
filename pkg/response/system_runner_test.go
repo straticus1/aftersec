@@ -2,7 +2,11 @@ package response
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"aftersec/pkg/breakglass"
 )
 
 type runnerFirewall struct{ applied, removed bool }
@@ -20,6 +24,23 @@ func TestSystemRunnerAppliesAndReleasesQuarantine(t *testing.T) {
 	if !fw.applied { t.Fatal("quarantine firewall was not applied") }
 	if _, err := r.Run(context.Background(), ActionReleaseQuarantine, nil); err != nil { t.Fatal(err) }
 	if !fw.removed { t.Fatal("quarantine firewall was not removed") }
+}
+
+func TestSystemRunnerBreakGlassActivatesWindow(t *testing.T) {
+	g, err := breakglass.NewGuard(filepath.Join(t.TempDir(), "bg.state"), "t", "ep", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewSystemActionRunner(nil, 4096).WithBreakGlass(g)
+	if _, err := r.Run(context.Background(), ActionBreakGlass, nil); err == nil {
+		t.Fatal("missing duration")
+	}
+	if _, err := r.Run(context.Background(), ActionBreakGlass, map[string]string{"duration": "15m"}); err != nil {
+		t.Fatal(err)
+	}
+	if !g.RelaxesPolicy() {
+		t.Fatal("window not active")
+	}
 }
 
 func TestSystemRunnerRejectsInvalidKillPID(t *testing.T) {

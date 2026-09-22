@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
+	"aftersec/pkg/breakglass"
 	"aftersec/pkg/forensics"
 )
 
@@ -19,10 +21,18 @@ import (
 type SystemActionRunner struct {
 	quarantine *QuarantineManager
 	maxBytes   int
+	glass      *breakglass.Guard
 }
 
 func NewSystemActionRunner(quarantine *QuarantineManager, maxBytes int) *SystemActionRunner {
 	return &SystemActionRunner{quarantine: quarantine, maxBytes: maxBytes}
+}
+
+func (r *SystemActionRunner) WithBreakGlass(g *breakglass.Guard) *SystemActionRunner {
+	if r != nil {
+		r.glass = g
+	}
+	return r
 }
 
 func (r *SystemActionRunner) Run(ctx context.Context, action Action, args map[string]string) ([]byte, error) {
@@ -57,6 +67,18 @@ func (r *SystemActionRunner) Run(ctx context.Context, action Action, args map[st
 		findings, err := forensics.ScanPersistenceMechanisms()
 		if err != nil { return nil, fmt.Errorf("list persistence: %w", err) }
 		return boundedJSON(findings, r.maxBytes)
+	case ActionBreakGlass:
+		if r.glass == nil {
+			return nil, fmt.Errorf("break-glass is not configured")
+		}
+		d, err := breakglass.ParseDuration(args["duration"])
+		if err != nil {
+			return nil, err
+		}
+		if err := r.glass.Activate(time.Now().Add(d)); err != nil {
+			return nil, err
+		}
+		return []byte("break-glass active"), nil
 	default:
 		return nil, fmt.Errorf("unsupported remote action")
 	}

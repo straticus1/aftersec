@@ -22,6 +22,17 @@ func TestActionMinterRejectsRoleActionAndCrossTenant(t *testing.T) {
 		}
 	}
 }
+func TestActionMinterBreakGlassIsAdminOnly(t *testing.T) {
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	m := NewActionMinter(key, ownerLookup{"ep": "org"}, time.Minute, time.Now)
+	if _, err := m.Mint(context.Background(), MintRequest{Role: "security_operator", TenantID: "org", EndpointID: "ep", Action: ActionBreakGlass, Arguments: map[string]string{"duration": "15m"}}); err == nil {
+		t.Fatal("operator minted break-glass")
+	}
+	if _, err := m.Mint(context.Background(), MintRequest{Role: "admin", TenantID: "org", EndpointID: "ep", Action: ActionBreakGlass, Arguments: map[string]string{"duration": "15m"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestActionMinterCreatesEndpointBoundShortLivedToken(t *testing.T) {
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
 	now := time.Now()

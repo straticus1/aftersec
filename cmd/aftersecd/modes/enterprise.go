@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"aftersec/pkg/breakglass"
 	"aftersec/pkg/client"
 	"aftersec/pkg/client/storage"
 	"aftersec/pkg/detection"
@@ -23,7 +24,7 @@ import (
 )
 
 // RunEnterprise starts the daemon in enterprise mode
-func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager) {
+func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager, glass *breakglass.Guard) {
 	log.Println("Starting AfterSec daemon in Enterprise Mode (gRPC Enabled)")
 
 	grpcClient, err := client.NewEnterpriseClient(cfg)
@@ -41,7 +42,7 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager) {
 			log.Printf("remote command channel disabled: action verification key is unavailable or invalid")
 		} else {
 			quarantine := response.NewQuarantineManager(response.NewPlatformFirewall())
-			runner := response.NewSystemActionRunner(quarantine, 1<<20)
+			runner := response.NewSystemActionRunner(quarantine, 1<<20).WithBreakGlass(glass)
 			executor := response.NewActionExecutor(ed25519.PublicKey(keyBytes), cfg.TenantID, "HW-"+hostnameOrUnknown(), runner, 1<<20, time.Now)
 			processor := client.NewCommandProcessor(cfg.TenantID, "HW-"+hostnameOrUnknown(), executor, 1<<20)
 			go func() {

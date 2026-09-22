@@ -4,6 +4,7 @@ import (
 	"aftersec/cmd/aftersecd/modes"
 	"aftersec/pkg/ai"
 	"aftersec/pkg/binaryauth"
+	"aftersec/pkg/breakglass"
 	"aftersec/pkg/client"
 	"aftersec/pkg/client/storage"
 	"aftersec/pkg/darkapi"
@@ -95,7 +96,7 @@ func handleAuthEvent(event edr.ProcessEvent, consumer interface {
 }, cfg *client.ClientConfig, mgr storage.Manager, authorizer *binaryauth.Authorizer, dsClient interface {
 	RealTimeScan(ctx context.Context, path string, timeoutSeconds int) (bool, darkscan.ThreatLevel, error)
 	IsEnabled() bool
-}) {
+}, glass *breakglass.Guard) {
 	allow := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -128,9 +129,13 @@ func handleAuthEvent(event edr.ProcessEvent, consumer interface {
 			return
 		}
 		if decision == binaryauth.DecisionDeny || authErr != nil {
-			allow = false
-			log.Printf("🛑 [BINARY AUTH] Blocked execution: %s", event.ExecPath)
-			return
+			if glass.RelaxesPolicy() {
+				log.Printf("break-glass: binary authorization deny overridden for %s", event.ExecPath)
+			} else {
+				allow = false
+				log.Printf("🛑 [BINARY AUTH] Blocked execution: %s", event.ExecPath)
+				return
+			}
 		}
 	}
 
@@ -186,7 +191,7 @@ func handleAuthEvent(event edr.ProcessEvent, consumer interface {
 	}
 
 	// Phase 2: Cloud Detonation Engine (enterprise enforcement only).
-	if cfg.Mode != client.ModeEnterprise {
+	if cfg.Mode != client.ModeEnterprise || glass.RelaxesPolicy() {
 		allow = true
 		return
 	}
@@ -362,6 +367,18 @@ func main() {
 			log.Fatalf("failed to init local storage: %v", err)
 		}
 		log.Printf("Initialized in STANDALONE mode")
+	}
+
+	hostname, _ := os.Hostname()
+	breakGlassPath := filepath.Join(cfg.Storage.Path, "breakglass.state")
+	breakGlass, glassErr := breakglass.NewGuard(breakGlassPath, cfg.TenantID, "HW-"+hostname, time.Now)
+	if glassErr != nil {
+		log.Printf("break-glass state rejected: %v", glassErr)
+		_ = os.Remove(breakGlassPath)
+		breakGlass, glassErr = breakglass.NewGuard(breakGlassPath, cfg.TenantID, "HW-"+hostname, time.Now)
+		if glassErr != nil {
+			log.Fatalf("break-glass guard unavailable: %v", glassErr)
+		}
 	}
 
 	if exporter, exportErr := darkapi.FromEnvironment(mgr); exportErr != nil {
@@ -694,7 +711,7 @@ func main() {
 					case authExecSem <- struct{}{}:
 						go func(ev edr.ProcessEvent) {
 							defer func() { <-authExecSem }()
-							handleAuthEvent(ev, esConsumer, cfg, mgr, binaryAuthorizer, dsClient)
+							handleAuthEvent(ev, esConsumer, cfg, mgr, binaryAuthorizer, dsClient, breakGlass)
 						}(event)
 					default:
 						log.Printf("🛑 [LOAD SHEDDING] AUTH_EXEC queue full; blocking %s", event.ExecPath)
@@ -871,7 +888,7 @@ func main() {
 	}
 
 	if cfg.Mode == client.ModeEnterprise {
-		modes.RunEnterprise(cfg, mgr)
+		modes.RunEnterprise(cfg, mgr, breakGlass)
 	} else {
 		modes.RunStandalone(cfg, mgr)
 	}
