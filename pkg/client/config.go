@@ -142,6 +142,10 @@ type BinaryAuthorizationConfig struct {
 	PolicyCachePath string `yaml:"policy_cache_path"`
 }
 
+type DetectionConfig struct {
+	PublicKeyBase64 string `yaml:"public_key_base64"`
+}
+
 type RansomwareConfig struct {
 	Enabled           bool     `yaml:"enabled"`
 	Required          bool     `yaml:"required"`
@@ -172,6 +176,7 @@ type DaemonConfig struct {
 	BinaryAuth     BinaryAuthorizationConfig `yaml:"binary_authorization"`
 	Ransomware     RansomwareConfig          `yaml:"ransomware"`
 	DeviceControl  DeviceControlConfig       `yaml:"device_control"`
+	Detection      DetectionConfig           `yaml:"detection"`
 }
 
 // ClientConfig represents the client-side configuration

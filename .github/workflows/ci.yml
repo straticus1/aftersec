@@ -79,3 +79,18 @@ jobs:
         run: go test ./cmd/aftersec-windows ./pkg/compliance
       - name: Build minimal scanner
         run: go build -o aftersec-windows.exe ./cmd/aftersec-windows
+      - name: Smoke usage and scan JSON
+        shell: powershell
+        run: |
+          & .\aftersec-windows.exe bogus
+          if ($LASTEXITCODE -ne 2) { throw "expected usage exit 2, got $LASTEXITCODE" }
+          $stdout = Join-Path $env:TEMP 'aftersec-windows-scan.json'
+          $stderr = Join-Path $env:TEMP 'aftersec-windows-scan.err'
+          $exe = Join-Path (Get-Location) 'aftersec-windows.exe'
+          $p = Start-Process -FilePath $exe -ArgumentList 'scan' -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 1) { throw "unexpected exit $($p.ExitCode): $(Get-Content $stderr -Raw)" }
+          $results = Get-Content $stdout -Raw | ConvertFrom-Json
+          if (@($results).Count -ne 2) { throw "expected 2 checks, got $(@($results).Count)" }
+          foreach ($r in $results) {
+            if (-not $r.name) { throw "missing check name" }
+          }

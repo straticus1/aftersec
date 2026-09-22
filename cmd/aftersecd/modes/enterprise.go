@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 
 	"aftersec/pkg/client"
 	"aftersec/pkg/client/storage"
+	"aftersec/pkg/detection"
 	"aftersec/pkg/forensics"
 	"aftersec/pkg/response"
 	"aftersec/pkg/scanners"
@@ -96,21 +98,39 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager) {
 		}
 
 		if strings.HasPrefix(resp.Action, "RUN_SIGMA::") {
-			log.Println("⚡️ Fleet Command Received: RUN_SIGMA")
-			sigmaB64 := strings.TrimPrefix(resp.Action, "RUN_SIGMA::")
-			if yamlBytes, err := base64.StdEncoding.DecodeString(sigmaB64); err == nil {
-				if rule, err := telemetry.ParseSigmaRule(yamlBytes); err == nil {
-					sqliteMgr, ok := mgr.(*storage.SQLiteManager)
-					if ok {
-						events, _ := telemetry.RunHunt(sqliteMgr, rule)
-						if len(events) > 0 {
-							log.Printf("🚨 Sigma Hunt MATCHED %d internal events! Queuing for upload...", len(events))
-							detailsBytes, _ := json.Marshal(events)
-							mgr.LogTelemetryEvent("Sigma Fleet Hunt", "sigma_match", "CRITICAL", string(detailsBytes))
-						} else {
-							log.Println("✅ Sigma Hunt finished safely with no matches.")
-						}
-					}
+			log.Printf("refusing unsigned Sigma heartbeat")
+			return
+		}
+		if strings.HasPrefix(resp.Action, detection.HeartbeatPrefix) {
+			key, err := decodeDetectionKey(cfg.Daemon.Detection.PublicKeyBase64)
+			if err != nil {
+				log.Printf("Sigma pack rejected: %v", err)
+				return
+			}
+			rules, err := detection.ActivateHeartbeatAction(resp.Action, detection.NewStore(key), time.Now())
+			if err != nil {
+				log.Printf("Sigma pack rejected: %v", err)
+				return
+			}
+			sqliteMgr, ok := mgr.(*storage.SQLiteManager)
+			if !ok {
+				log.Printf("Sigma hunt requires local telemetry storage")
+				return
+			}
+			for _, item := range rules {
+				rule, err := telemetry.ParseSigmaRule([]byte(item.YAML))
+				if err != nil {
+					log.Printf("Sigma rule %s rejected: %v", item.ID, err)
+					return
+				}
+				events, err := telemetry.RunHunt(sqliteMgr, rule)
+				if err != nil {
+					log.Printf("Sigma hunt %s failed: %v", item.ID, err)
+					return
+				}
+				if len(events) > 0 {
+					detailsBytes, _ := json.Marshal(events)
+					_ = mgr.LogTelemetryEvent("Sigma Fleet Hunt", "sigma_match", "CRITICAL", string(detailsBytes))
 				}
 			}
 		} else if resp.PolicyUpdated {
@@ -179,4 +199,15 @@ func hostnameOrUnknown() string {
 		return "unknown"
 	}
 	return hostname
+}
+
+func decodeDetectionKey(encoded string) (ed25519.PublicKey, error) {
+	if encoded == "" {
+		return nil, fmt.Errorf("detection public key is required")
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("detection public key is invalid")
+	}
+	return ed25519.PublicKey(raw), nil
 }

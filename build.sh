@@ -15,6 +15,7 @@ function clean() {
 	rm -f bin/aftersec-gui
 	rm -f bin/aftersecd
 	rm -f bin/aftersec-server
+	rm -f bin/aftersec-windows.exe
 	rm -f bin/afterseclib.*
 	rm -rf aftersec-dashboard/.next
 	rm -rf aftersec-dashboard/out
@@ -186,5 +187,5 @@ case "${1:-}" in
 	package) package ;;
 	build-installer) build-installer ;;
 	all) all; package ;;
-	*) echo "Usage: $0 {clean|cli|gui|daemon|server|lib|dashboard|proto|debug|package|build-installer|all}" ;;
+	*) echo "Usage: $0 {clean|cli|windows|gui|daemon|server|lib|dashboard|proto|debug|package|build-installer|all}" ;;
 esac

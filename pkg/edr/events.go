@@ -18,6 +18,7 @@ const (
 	EventAuthWrite    EventType = "auth_write"
 	EventNotifyOpen   EventType = "notify_open"
 	EventNotifyClose  EventType = "notify_close"
+	EventNotifyRename EventType = "notify_rename"
 )
 
 // ProcessEvent holds normalized telemetry for a process/filesystem event

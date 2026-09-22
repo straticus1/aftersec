@@ -23,8 +23,9 @@ type ESConsumer struct {
 	events chan<- ProcessEvent
 }
 
-func NotifyWriteEventCode() uint32 { return uint32(C.ES_EVENT_TYPE_NOTIFY_WRITE) }
-func AuthWriteEventCode() uint32   { return uint32(C.auth_open_event_code()) }
+func NotifyWriteEventCode() uint32  { return uint32(C.ES_EVENT_TYPE_NOTIFY_WRITE) }
+func AuthWriteEventCode() uint32    { return uint32(C.auth_open_event_code()) }
+func NotifyRenameEventCode() uint32 { return uint32(C.notify_rename_event_code()) }
 
 // globalConsumer is required because CGO callbacks cannot carry Go context cleanly
 var globalConsumer *ESConsumer
@@ -51,6 +52,8 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 		eventType = EventNotifyMount
 	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_WRITE {
 		eventType = EventNotifyWrite
+	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_RENAME {
+		eventType = EventNotifyRename
 	} else if msg.event_type == C.ES_EVENT_TYPE_AUTH_OPEN && bool(C.open_requests_write(msg)) {
 		eventType = EventAuthWrite
 		C.retain_message_safe(msg)
@@ -86,6 +89,13 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 	if eventType == EventNotifyWrite {
 		var tLen C.int
 		tPath := C.get_target_path(msg, &tLen)
+		if tLen > 0 {
+			execPath = C.GoStringN(tPath, tLen)
+		}
+	}
+	if eventType == EventNotifyRename {
+		var tLen C.int
+		tPath := C.get_rename_path(msg, &tLen)
 		if tLen > 0 {
 			execPath = C.GoStringN(tPath, tLen)
 		}

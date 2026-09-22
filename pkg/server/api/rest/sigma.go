@@ -2,11 +2,15 @@ package rest
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"time"
+
+	"aftersec/pkg/detection"
 )
 
 type SigmaDeployRequest struct {
-	RuleYAML string `json:"rule_yaml"`
+	Pack detection.SignedPack `json:"pack"`
 }
 
 func (r *Router) handleSigmaDeploy(w http.ResponseWriter, req *http.Request) {
@@ -21,18 +25,20 @@ func (r *Router) handleSigmaDeploy(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if deployReq.RuleYAML == "" {
-		http.Error(w, "rule_yaml is required", http.StatusBadRequest)
+	if err := r.enterpriseSrv.QueueSigmaPack(deployReq.Pack, time.Now()); err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, detection.ErrInvalidSignature) || errors.Is(err, detection.ErrRollback) {
+			code = http.StatusUnprocessableEntity
+		}
+		http.Error(w, err.Error(), code)
 		return
 	}
 
-	// Deploy rule to active connected fleets via the gRPC struct
-	r.enterpriseSrv.SetPendingSigmaRule(deployReq.RuleYAML)
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Sigma rule queued for fleet deployment.",
+		"success":         true,
+		"message":         "Signed Sigma pack queued for fleet deployment.",
 		"deployment_mode": "Next Heartbeat",
+		"version":         deployReq.Pack.Pack.Version,
 	})
 }

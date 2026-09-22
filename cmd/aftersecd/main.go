@@ -275,7 +275,7 @@ func main() {
 	} else {
 		// 0=AUTH_EXEC, 24=NOTIFY_EXEC, 26=NOTIFY_EXIT, 123=NOTIFY_MOUNT
 		fmt.Printf("\033[32m[OK]\033[0m Endpoint Security Framework Driver Active. Subscribed: AUTH_EXEC, NOTIFY_EXEC, NOTIFY_EXIT...\n")
-		err = esConsumer.Subscribe([]uint32{0, 24, 26, 123, edr.NotifyWriteEventCode(), edr.AuthWriteEventCode()})
+		err = esConsumer.Subscribe([]uint32{0, 24, 26, 123, edr.NotifyWriteEventCode(), edr.AuthWriteEventCode(), edr.NotifyRenameEventCode()})
 		if err != nil {
 			edrStartupErr = err
 			log.Printf("Failed to subscribe to ES events: %v", err)
@@ -410,6 +410,7 @@ func main() {
 
 	var ransomwareShield *ransomware.Shield
 	var ransomwareCanaries *ransomware.CanaryManager
+	renameWindow := ransomware.NewRenameWindow(time.Minute)
 	if cfg.Daemon.Ransomware.Enabled {
 		for _, directory := range cfg.Daemon.Ransomware.CanaryDirectories {
 			if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -675,6 +676,14 @@ func main() {
 						}); err != nil {
 							log.Printf("Ransomware containment failed for %s: %v", event.ExecPath, err)
 						}
+					}
+				}
+				if event.Type == edr.EventNotifyRename && ransomwareShield != nil {
+					count := renameWindow.Add(event.PID, event.Timestamp)
+					if err := ransomwareShield.Observe(context.Background(), ransomware.Event{
+						PID: event.PID, Path: event.ExecPath, RenameCount: count,
+					}); err != nil {
+						log.Printf("Ransomware rename containment failed for %s: %v", event.ExecPath, err)
 					}
 				}
 				if event.Type == edr.EventNotifyClose {

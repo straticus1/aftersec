@@ -77,6 +77,19 @@ uint32_t auth_open_event_code(void) {
     return (uint32_t)ES_EVENT_TYPE_AUTH_OPEN;
 }
 
+const char* get_rename_path(const es_message_t *msg, int *out_len) {
+    if (!msg || msg->event_type != ES_EVENT_TYPE_NOTIFY_RENAME || !msg->event.rename.source) {
+        *out_len = 0;
+        return "";
+    }
+    *out_len = (int)msg->event.rename.source->path.length;
+    return msg->event.rename.source->path.data;
+}
+
+uint32_t notify_rename_event_code(void) {
+    return (uint32_t)ES_EVENT_TYPE_NOTIFY_RENAME;
+}
+
 void retain_message_safe(const es_message_t *msg) {
     if (!msg) return;
 

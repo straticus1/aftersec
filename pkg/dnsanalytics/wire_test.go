@@ -56,3 +56,14 @@ func TestDecodeWireQueryRejectsMalformedFrames(t *testing.T) {
 		t.Fatal("accepted DoH GET without URL")
 	}
 }
+
+func TestDecodeWireQueryRejectsCompressionPointer(t *testing.T) {
+	packet := []byte{
+		0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0,
+		0xc0, 0x0c, 0, 1, 0, 1,
+	}
+	_, err := DecodeWireQuery("udp", packet, nil)
+	if err == nil || err.Error() != "DNS compression pointer" {
+		t.Fatalf("err=%v", err)
+	}
+}

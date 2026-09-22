@@ -12,6 +12,7 @@ import (
 	"time"
 
 	grpcapi "aftersec/pkg/api/grpc"
+	"aftersec/pkg/detection"
 	"aftersec/pkg/response"
 	"aftersec/pkg/server/auth"
 )
@@ -30,7 +31,9 @@ func (m *mockEnterprise) DispatchCommand(_ string, cmd *grpcapi.ServerCommand) e
 	return nil
 }
 
-func (m *mockEnterprise) SetPendingSigmaRule(_ string) {}
+func (m *mockEnterprise) QueueSigmaPack(_ detection.SignedPack, _ time.Time) error {
+	return nil
+}
 
 type mockActionMinter struct {
 	request response.MintRequest

@@ -2,11 +2,14 @@ package grpcserver
 
 import (
 	"context"
+	"crypto/ed25519"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	grpcapi "aftersec/pkg/api/grpc"
+	"aftersec/pkg/detection"
 	"aftersec/pkg/selfprotect"
 	"aftersec/pkg/server/auth"
 	"google.golang.org/grpc"
@@ -111,21 +114,37 @@ func TestDispatchCommand_ConcurrentStreams(t *testing.T) {
 	}
 }
 
-func TestSetGetPendingSigmaRule(t *testing.T) {
-	s := NewServer(nil)
-	const rule = "title: Test\ndetection:\n  condition: true"
-	s.SetPendingSigmaRule(rule)
-	if got := s.GetPendingSigmaRule(); got != rule {
-		t.Errorf("expected rule %q, got %q", rule, got)
+func testSigmaPack(t *testing.T, version uint64) (ed25519.PublicKey, detection.SignedPack) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
 	}
+	pack, err := detection.SignPack(detection.Pack{Version: version, Rules: []detection.Rule{{ID: "tmp", YAML: "title: tmp\ndetection:\n  selection:\n    Image: /tmp/a\n"}}}, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pub, pack
 }
 
-func TestSetPendingSigmaRule_Overwrite(t *testing.T) {
+func TestQueueSigmaPackRejectsUnsignedAndRollback(t *testing.T) {
 	s := NewServer(nil)
-	s.SetPendingSigmaRule("rule-v1")
-	s.SetPendingSigmaRule("rule-v2")
-	if got := s.GetPendingSigmaRule(); got != "rule-v2" {
-		t.Errorf("expected %q after overwrite, got %q", "rule-v2", got)
+	pub, pack := testSigmaPack(t, 2)
+	s.SetSigmaStore(detection.NewStore(pub))
+	if err := s.QueueSigmaPack(pack, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.PendingSigmaPack()
+	if !ok || got.Pack.Version != 2 {
+		t.Fatalf("%+v %v", got, ok)
+	}
+	tampered := pack
+	tampered.Signature[0] ^= 1
+	if err := s.QueueSigmaPack(tampered, time.Now()); err == nil {
+		t.Fatal("accepted tampered pack")
+	}
+	if err := NewServer(nil).QueueSigmaPack(pack, time.Now()); err == nil {
+		t.Fatal("queued pack without a key store")
 	}
 }
 
@@ -137,9 +156,13 @@ func TestHeartbeat_EmptyTenantIDReturnsError(t *testing.T) {
 	}
 }
 
-func TestHeartbeat_WithPendingSigmaRule(t *testing.T) {
+func TestHeartbeat_WithPendingSigmaPack(t *testing.T) {
 	s := NewServer(nil)
-	s.SetPendingSigmaRule("detection: condition: true")
+	pub, pack := testSigmaPack(t, 2)
+	s.SetSigmaStore(detection.NewStore(pub))
+	if err := s.QueueSigmaPack(pack, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 
 	resp, err := s.Heartbeat(nil, &grpcapi.HeartbeatRequest{
 		TenantId: "tenant-1", HardwareId: "endpoint-1", Timestamp: time.Now().Unix(),
@@ -147,8 +170,8 @@ func TestHeartbeat_WithPendingSigmaRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.Action == "" || resp.Action == "NONE" {
-		t.Errorf("expected action to encode sigma rule, got %q", resp.Action)
+	if !strings.HasPrefix(resp.Action, detection.HeartbeatPrefix) {
+		t.Errorf("expected signed pack action, got %q", resp.Action)
 	}
 }
 

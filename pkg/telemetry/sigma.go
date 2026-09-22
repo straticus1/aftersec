@@ -2,11 +2,15 @@ package telemetry
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
-	"gopkg.in/yaml.v3"
 	"aftersec/pkg/client/storage"
+
+	"gopkg.in/yaml.v3"
 )
+
+var sigmaFieldPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
 // SigmaRule represents a generic detection rule based on the Sigma format.
 type SigmaRule struct {
@@ -25,9 +29,21 @@ type SigmaRule struct {
 
 // ParseSigmaRule parses a YAML byte array into a SigmaRule struct.
 func ParseSigmaRule(data []byte) (*SigmaRule, error) {
+	if len(data) == 0 || len(data) > 64<<10 {
+		return nil, fmt.Errorf("invalid sigma rule")
+	}
 	var rule SigmaRule
 	if err := yaml.Unmarshal(data, &rule); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(rule.Title) == "" || len(rule.Detection.Selection) == 0 {
+		return nil, fmt.Errorf("invalid sigma rule")
+	}
+	for key := range rule.Detection.Selection {
+		field := strings.Split(key, "|")[0]
+		if !sigmaFieldPattern.MatchString(field) {
+			return nil, fmt.Errorf("invalid sigma field")
+		}
 	}
 	return &rule, nil
 }

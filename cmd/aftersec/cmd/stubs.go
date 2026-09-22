@@ -1,55 +1,154 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"aftersec/pkg/client"
+	"aftersec/pkg/forensics"
+	"aftersec/pkg/plugins"
+	"aftersec/pkg/selfprotect"
+
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var pluginCmd = &cobra.Command{
 	Use:   "plugin",
 	Short: "Manage Starlark security plugins",
+}
+
+var pluginListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List installed Starlark plugins",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return fmt.Errorf("Plugin management is coming in a future update.")
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		dir := filepath.Join(home, ".aftersec", "scripts")
+		entries, err := os.ReadDir(dir)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		names := make([]string, 0)
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".star") {
+				names = append(names, entry.Name())
+			}
+		}
+		return printOutput(map[string]any{"count": plugins.NumStarlarkRules(), "scripts": names, "dir": dir})
 	},
 }
 
 var forensicsCmd = &cobra.Command{
 	Use:   "forensics",
 	Short: "Advanced forensics commands (memory, syscalls, persistence)",
+}
+
+var forensicsPersistenceCmd = &cobra.Command{
+	Use:   "persistence",
+	Short: "Scan autostart persistence locations",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return fmt.Errorf("Forensics suite is coming in a future update.")
+		findings, err := forensics.ScanPersistenceMechanisms()
+		if err != nil {
+			return err
+		}
+		return printOutput(findings)
 	},
 }
 
 var baselineCmd = &cobra.Command{
 	Use:   "baseline",
 	Short: "Manage security baselines",
+}
+
+var baselineListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List stored security baselines",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return fmt.Errorf("Advanced baseline management is coming in a future update. Use 'commit' and 'restore' for now.")
+		history, err := globalMgr.GetHistory()
+		if err != nil {
+			return err
+		}
+		return printOutput(history)
 	},
 }
 
 var reportCmd = &cobra.Command{
 	Use:   "report",
-	Short: "Generate compliance reports (CIS, NIST, SOC2)",
+	Short: "Generate compliance reports from the latest baseline",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return fmt.Errorf("Reporting engine is coming in a future update.")
+		latest, err := globalMgr.GetLatest()
+		if err != nil {
+			return err
+		}
+		if latest == nil {
+			return fmt.Errorf("no baseline is available; run a scan first")
+		}
+		return printOutput(latest)
 	},
 }
 
 var configCmd = &cobra.Command{
 	Use:   "config",
-	Short: "View and edit AfterSec configuration",
+	Short: "View AfterSec configuration",
+}
+
+var configShowCmd = &cobra.Command{
+	Use:   "show",
+	Short: "Print the loaded configuration with secrets redacted",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return fmt.Errorf("Configuration management is coming in a future update.")
+		if globalCfg == nil {
+			return fmt.Errorf("configuration is unavailable")
+		}
+		copyCfg := *globalCfg
+		if copyCfg.Server != nil {
+			serverCopy := *copyCfg.Server
+			serverCopy.TLS.Key = redact(serverCopy.TLS.Key)
+			serverCopy.TLS.Cert = redact(serverCopy.TLS.Cert)
+			copyCfg.Server = &serverCopy
+		}
+		raw, err := yaml.Marshal(&copyCfg)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), string(raw))
+		return nil
 	},
 }
 
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
 	Short: "Control the AfterSec background daemon",
+}
+
+var daemonStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show daemon PID file status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return fmt.Errorf("Daemon control is coming in a future update.")
+		path := ""
+		if globalCfg != nil {
+			path = globalCfg.Daemon.SelfProtection.PIDFile
+		}
+		info := map[string]any{"pid_file": path, "running": false}
+		if path != "" {
+			raw, err := os.ReadFile(path)
+			if err == nil {
+				info["pid"] = strings.TrimSpace(string(raw))
+				info["running"] = true
+			} else if !os.IsNotExist(err) {
+				if err == selfprotect.ErrUnsafeWatchdogConfig {
+					return err
+				}
+				return err
+			}
+		}
+		return printOutput(info)
 	},
 }
 
@@ -57,19 +156,62 @@ var enrollCmd = &cobra.Command{
 	Use:   "enroll",
 	Short: "Enroll this endpoint into an AfterSec Management Server",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return fmt.Errorf("Enterprise enrollment is coming in a future update.")
+		if globalCfg == nil || globalCfg.Mode != client.ModeEnterprise {
+			return fmt.Errorf("enterprise mode is required for enrollment")
+		}
+		grpcClient, err := client.NewEnterpriseClient(globalCfg)
+		if err != nil {
+			return err
+		}
+		defer grpcClient.Close()
+		hostname, _ := os.Hostname()
+		resp, err := grpcClient.Enroll(cmd.Context(), "local", hostname, runtime.GOOS+"/"+runtime.GOARCH)
+		if err != nil {
+			return err
+		}
+		if resp == nil || !resp.Success {
+			return fmt.Errorf("enrollment was rejected")
+		}
+		return printOutput(resp)
 	},
 }
 
 var shellCmd = &cobra.Command{
 	Use:   "shell",
-	Short: "Launch the AfterSec Interactive Shell",
+	Short: "Show the AfterSec command surface",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return fmt.Errorf("Interactive Shell is coming in a future update.")
+		names := make([]string, 0)
+		for _, child := range rootCmd.Commands() {
+			if !child.Hidden {
+				names = append(names, child.Use)
+			}
+		}
+		return printOutput(map[string]any{"commands": names})
 	},
 }
 
+func redact(value string) string {
+	if value == "" {
+		return ""
+	}
+	return "[redacted]"
+}
+
+func printOutput(value any) error {
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(raw))
+	return nil
+}
+
 func init() {
+	pluginCmd.AddCommand(pluginListCmd)
+	forensicsCmd.AddCommand(forensicsPersistenceCmd)
+	baselineCmd.AddCommand(baselineListCmd)
+	configCmd.AddCommand(configShowCmd)
+	daemonCmd.AddCommand(daemonStatusCmd)
 	rootCmd.AddCommand(pluginCmd)
 	rootCmd.AddCommand(forensicsCmd)
 	rootCmd.AddCommand(baselineCmd)

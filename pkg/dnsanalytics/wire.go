@@ -50,7 +50,10 @@ func decodeQuestionName(packet []byte) (string, error) {
 		if length == 0 {
 			return NormalizeDomain(domain)
 		}
-		if length > 63 || offset+length > len(packet) || length&0xc0 != 0 {
+		if length&0xc0 == 0xc0 {
+			return "", fmt.Errorf("DNS compression pointer")
+		}
+		if length > 63 || offset+length > len(packet) {
 			return "", fmt.Errorf("invalid DNS label encoding")
 		}
 		if domain != "" {

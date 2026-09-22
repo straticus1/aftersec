@@ -2,7 +2,6 @@ package grpcserver
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"sync"
@@ -10,6 +9,7 @@ import (
 
 	grpcapi "aftersec/pkg/api/grpc"
 	"aftersec/pkg/attestation"
+	"aftersec/pkg/detection"
 	"aftersec/pkg/eventjournal"
 	"aftersec/pkg/selfprotect"
 	"aftersec/pkg/server/auth"
@@ -28,7 +28,8 @@ type Server struct {
 	eventQueue       chan *grpcapi.ClientEvent
 	mu               sync.RWMutex
 	activeStreams    map[string]chan *grpcapi.ServerCommand
-	pendingSigmaRule string
+	pendingSigmaPack *detection.SignedPack
+	sigmaStore       *detection.Store
 	heartbeatTracker *selfprotect.Tracker
 	commandAudit     CommandResultAudit
 }
@@ -66,16 +67,33 @@ func (s *Server) CheckHeartbeatSilence(now time.Time) error {
 	return tracker.Check(now)
 }
 
-func (s *Server) SetPendingSigmaRule(rule string) {
+func (s *Server) SetSigmaStore(store *detection.Store) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pendingSigmaRule = rule
+	s.sigmaStore = store
 }
 
-func (s *Server) GetPendingSigmaRule() string {
+func (s *Server) QueueSigmaPack(signed detection.SignedPack, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sigmaStore == nil {
+		return detection.ErrInvalidPack
+	}
+	if err := s.sigmaStore.Activate(signed, now); err != nil {
+		return err
+	}
+	copyPack := signed
+	s.pendingSigmaPack = &copyPack
+	return nil
+}
+
+func (s *Server) PendingSigmaPack() (detection.SignedPack, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.pendingSigmaRule
+	if s.pendingSigmaPack == nil {
+		return detection.SignedPack{}, false
+	}
+	return *s.pendingSigmaPack, true
 }
 
 func NewServer(repos *repository.Repositories) *Server {
@@ -200,8 +218,12 @@ func (s *Server) Heartbeat(ctx context.Context, req *grpcapi.HeartbeatRequest) (
 	}
 
 	action := "NONE"
-	if rule := s.GetPendingSigmaRule(); rule != "" {
-		action = "RUN_SIGMA::" + base64.StdEncoding.EncodeToString([]byte(rule))
+	if pack, ok := s.PendingSigmaPack(); ok {
+		encoded, err := detection.HeartbeatAction(pack)
+		if err != nil {
+			return nil, status.Error(codes.FailedPrecondition, "sigma pack unavailable")
+		}
+		action = encoded
 	}
 
 	// Stub heartbeat tracking

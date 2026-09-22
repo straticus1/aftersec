@@ -9,6 +9,7 @@ import (
 
 	grpcapi "aftersec/pkg/api/grpc"
 	"aftersec/pkg/billing"
+	"aftersec/pkg/detection"
 	"aftersec/pkg/darkscan"
 	"aftersec/pkg/ratelimit"
 	"aftersec/pkg/response"
@@ -22,7 +23,7 @@ import (
 // enterpriseServer is the subset of grpcserver.Server used by the REST layer.
 type enterpriseServer interface {
 	DispatchCommand(endpointID string, cmd *grpcapi.ServerCommand) error
-	SetPendingSigmaRule(rule string)
+	QueueSigmaPack(pack detection.SignedPack, now time.Time) error
 }
 
 type RemoteActionMinter interface {
