@@ -40,6 +40,30 @@ This pass also completed the endpoint and network integration tranches:
 
 ### Active backlog by feature
 
+Status (2026-09-25, later pass): Endpoint Security subscriptions use the SDK
+event constants. Exec events copy the target path and argument vector, and a
+`launchctl`/`systemctl` exec with a stop verb, a shell wrapper, or a missing
+argument vector is denied. Rename and unlink of a watched path record a
+before-image and, for a rename, the destination bytes. A TCC revoke or delete
+aimed at an AfterSec identity is logged. The daemon checks the embedded
+Endpoint Security entitlement when self-protection is enabled. `aftersec enroll`
+sends only a hardware attestation and does not call the unattested enroll RPC.
+The Secure Enclave adapter creates a non-exportable key and refuses a software
+quote because this SDK has no key-attestation API. The Linux TPM adapter opens
+`/dev/tpmrm0` and refuses a quote when no attestation key is provisioned.
+Network Extension signing remains blocked on the Apple developer certificate.
+`pkg/netsensor/bpf/build.sh` compiles the BPF object and does not sign it.
+A completed posture scan can sign its findings when compliance is enabled.
+The signature covers the findings that ran. It is not a full CIS catalog.
+The same scan schedule runs a signed control pack when one is configured.
+The management server correlates file-hash telemetry into a tenant-isolated
+alert table and does not acknowledge an event whose correlation fails.
+Signed Sigma packs and the KEV/EPSS join types already exist. A full
+OS-versioned CIS catalog is not claimed. Platform quarantine, PostgreSQL audit, and mount-race
+integration tests still need their target systems.
+
+
+
 - **#1:** platform integration tests for quarantine/release.
 - **#2:** complete; add PostgreSQL integration coverage for concurrent audit
   writers.

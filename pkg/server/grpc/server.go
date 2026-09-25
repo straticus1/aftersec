@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -10,10 +11,16 @@ import (
 	grpcapi "aftersec/pkg/api/grpc"
 	"aftersec/pkg/attestation"
 	"aftersec/pkg/detection"
+	"aftersec/pkg/display"
 	"aftersec/pkg/eventjournal"
+	"aftersec/pkg/fleetcorrelation"
+	"aftersec/pkg/geoip"
+	"aftersec/pkg/response"
 	"aftersec/pkg/selfprotect"
 	"aftersec/pkg/server/auth"
+	"aftersec/pkg/server/displayframes"
 	"aftersec/pkg/server/repository"
+	"aftersec/pkg/server/stolen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -32,6 +39,18 @@ type Server struct {
 	sigmaStore       *detection.Store
 	heartbeatTracker *selfprotect.Tracker
 	commandAudit     CommandResultAudit
+	fleetEngine      *fleetcorrelation.Engine
+	fleetSink        fleetcorrelation.Sink
+	geo              *geoip.Resolver
+	displayFrames    *displayframes.Store
+	pendingDisplay   map[string]displayNote
+	stolen           *stolen.Registry
+	stolenMinter     StolenMinter
+}
+
+type displayNote struct {
+	action string
+	at     time.Time
 }
 
 type CommandResultAudit interface {
@@ -51,6 +70,48 @@ func (s *Server) SetHeartbeatTracker(tracker *selfprotect.Tracker) {
 	s.heartbeatTracker = tracker
 }
 
+func (s *Server) SetDisplayFrames(store *displayframes.Store) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.displayFrames = store
+}
+
+// NoteDisplayCommand remembers a signed display request so a later result
+// can be stored only when this server asked for it.
+func (s *Server) NoteDisplayCommand(endpointID, commandID, action string) {
+	if s == nil || endpointID == "" || commandID == "" {
+		return
+	}
+	if action != string(response.ActionDisplayShot) && action != string(response.ActionDisplayRecord) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingDisplay == nil {
+		s.pendingDisplay = make(map[string]displayNote)
+	}
+	if len(s.pendingDisplay) >= 256 {
+		for key, note := range s.pendingDisplay {
+			if time.Since(note.at) > 5*time.Minute {
+				delete(s.pendingDisplay, key)
+			}
+		}
+	}
+	if len(s.pendingDisplay) >= 256 {
+		return
+	}
+	s.pendingDisplay[endpointID+"\x00"+commandID] = displayNote{action: action, at: time.Now()}
+}
+
+func (s *Server) ForgetDisplayCommand(endpointID, commandID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	delete(s.pendingDisplay, endpointID+"\x00"+commandID)
+	s.mu.Unlock()
+}
+
 func (s *Server) SetCommandResultAudit(audit CommandResultAudit) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -65,6 +126,13 @@ func (s *Server) CheckHeartbeatSilence(now time.Time) error {
 		return fmt.Errorf("heartbeat silence tracker is not configured")
 	}
 	return tracker.Check(now)
+}
+
+func (s *Server) SetFleetCorrelation(engine *fleetcorrelation.Engine, sink fleetcorrelation.Sink) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fleetEngine = engine
+	s.fleetSink = sink
 }
 
 func (s *Server) SetSigmaStore(store *detection.Store) {
@@ -98,9 +166,10 @@ func (s *Server) PendingSigmaPack() (detection.SignedPack, bool) {
 
 func NewServer(repos *repository.Repositories) *Server {
 	s := &Server{
-		repos:         repos,
-		eventQueue:    make(chan *grpcapi.ClientEvent, 10000), // High capacity ring-buffer
-		activeStreams: make(map[string]chan *grpcapi.ServerCommand),
+		repos:          repos,
+		eventQueue:     make(chan *grpcapi.ClientEvent, 10000), // High capacity ring-buffer
+		activeStreams:  make(map[string]chan *grpcapi.ServerCommand),
+		pendingDisplay: make(map[string]displayNote),
 	}
 	// Start the ML Evaluator consumer
 	go s.processMLBaselines()
@@ -217,7 +286,12 @@ func (s *Server) Heartbeat(ctx context.Context, req *grpcapi.HeartbeatRequest) (
 		}
 	}
 
+	s.logPeerPlace(ctx, req.HardwareId)
+
 	action := "NONE"
+	if stolenAction := s.stolenAction(req.TenantId, req.HardwareId); stolenAction != "" {
+		action = stolenAction
+	}
 	if pack, ok := s.PendingSigmaPack(); ok {
 		encoded, err := detection.HeartbeatAction(pack)
 		if err != nil {
@@ -239,14 +313,29 @@ func (s *Server) Heartbeat(ctx context.Context, req *grpcapi.HeartbeatRequest) (
 // queue-only development deployments still refuse to acknowledge dropped data.
 func (s *Server) StreamEvents(stream grpcapi.EnterpriseService_StreamEventsServer) error {
 	var count int32
+	stolenMessage := ""
 	for {
 		event, err := stream.Recv()
 		if err != nil {
 			// EOF or client disconnected
+			message := "Stream closed"
+			if stolenMessage != "" {
+				message = stolenMessage
+			}
 			return stream.SendAndClose(&grpcapi.StreamAck{
 				EventsProcessed: count,
-				Message:         "Stream closed",
+				Message:         message,
 			})
+		}
+
+		if event.EventType == "stolen_camera" {
+			summary, stored := s.takeStolenCamera(event)
+			event.Payload = summary
+			if stored {
+				stolenMessage = "stolen camera stored"
+			} else if stolenMessage == "" {
+				stolenMessage = "stolen camera rejected"
+			}
 		}
 
 		if s.eventJournal != nil {
@@ -263,7 +352,16 @@ func (s *Server) StreamEvents(stream grpcapi.EnterpriseService_StreamEventsServe
 					Message:         "Durable event journal unavailable; retry unacknowledged events",
 				})
 			}
+			if err := s.correlate(context.Background(), event); err != nil {
+				return stream.SendAndClose(&grpcapi.StreamAck{
+					EventsProcessed: count,
+					Message:         "Fleet correlation rejected the event; retry unacknowledged events",
+				})
+			}
 			count++
+			if event.EventType == "process_flow" {
+				s.logFlowPlace(event.HardwareId, event.Payload)
+			}
 			select {
 			case s.eventQueue <- event:
 			default:
@@ -275,9 +373,18 @@ func (s *Server) StreamEvents(stream grpcapi.EnterpriseService_StreamEventsServe
 		// Push the event to the async aggregation queue. If the queue is full,
 		// close the stream immediately and acknowledge only events already
 		// accepted, allowing the client to retry the unacknowledged remainder.
+		if err := s.correlate(context.Background(), event); err != nil {
+			return stream.SendAndClose(&grpcapi.StreamAck{
+				EventsProcessed: count,
+				Message:         "Fleet correlation rejected the event; retry unacknowledged events",
+			})
+		}
 		select {
 		case s.eventQueue <- event:
 			count++
+			if event.EventType == "process_flow" {
+				s.logFlowPlace(event.HardwareId, event.Payload)
+			}
 		default:
 			return stream.SendAndClose(&grpcapi.StreamAck{
 				EventsProcessed: count,
@@ -287,6 +394,55 @@ func (s *Server) StreamEvents(stream grpcapi.EnterpriseService_StreamEventsServe
 
 		// Periodically acknowledge to keep connection alive if needed, but for ClientStreaming we just collect
 	}
+}
+
+func (s *Server) acceptDisplayOutput(tenant, endpoint, commandID, output string) error {
+	frame, err := display.OpenEnvelope([]byte(output))
+	s.mu.Lock()
+	note, noted := s.pendingDisplay[endpoint+"\x00"+commandID]
+	if noted {
+		delete(s.pendingDisplay, endpoint+"\x00"+commandID)
+	}
+	store := s.displayFrames
+	s.mu.Unlock()
+	if errors.Is(err, display.ErrNotEnvelope) {
+		if noted {
+			return fmt.Errorf("display command did not return a frame")
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !noted || time.Since(note.at) > 5*time.Minute {
+		return fmt.Errorf("display frame was not requested")
+	}
+	if note.action != string(response.ActionDisplayShot) && note.action != string(response.ActionDisplayRecord) {
+		return fmt.Errorf("display frame was not requested")
+	}
+	if store == nil {
+		return fmt.Errorf("display frame store is not configured")
+	}
+	return store.Save(tenant, endpoint, commandID, frame)
+}
+
+func (s *Server) correlate(ctx context.Context, event *grpcapi.ClientEvent) error {
+	if s == nil || event == nil {
+		return nil
+	}
+	s.mu.RLock()
+	engine := s.fleetEngine
+	sink := s.fleetSink
+	s.mu.RUnlock()
+	if engine == nil {
+		return nil
+	}
+	observed, ok, err := fleetcorrelation.FromTelemetry(event.TenantId, event.HardwareId, event.EventType, event.Payload, time.Unix(event.Timestamp, 0).UTC())
+	if err != nil || !ok {
+		return err
+	}
+	_, err = engine.RecordAndPersist(ctx, observed, sink)
+	return err
 }
 
 func (s *Server) ConnectCommandStream(stream grpcapi.EnterpriseService_ConnectCommandStreamServer) error {
@@ -310,6 +466,7 @@ func (s *Server) ConnectCommandStream(stream grpcapi.EnterpriseService_ConnectCo
 	s.mu.Lock()
 	s.activeStreams[endpointID] = cmdChan
 	s.mu.Unlock()
+	s.deliverStolen(stream.Context(), tenantID, endpointID, cmdChan)
 
 	defer func() {
 		s.mu.Lock()
@@ -341,6 +498,13 @@ func (s *Server) ConnectCommandStream(stream grpcapi.EnterpriseService_ConnectCo
 			if err := audit.AppendResult(stream.Context(), tenantID, endpointID, res.CommandId, res.Status, time.Now()); err != nil {
 				errChan <- status.Error(codes.Unavailable, "command result audit persistence failed")
 				return
+			}
+			if res.Status == "SUCCESS" {
+				if err := s.acceptDisplayOutput(tenantID, endpointID, res.CommandId, res.Output); err != nil {
+					log.Printf("display frame rejected endpoint=%s command=%s: %v", endpointID, res.CommandId, err)
+				}
+			} else {
+				s.ForgetDisplayCommand(endpointID, res.CommandId)
 			}
 			log.Printf("Received Command Output from %s for %s: %s", endpointID, res.CommandId, res.Status)
 		}

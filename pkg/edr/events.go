@@ -19,18 +19,24 @@ const (
 	EventNotifyOpen   EventType = "notify_open"
 	EventNotifyClose  EventType = "notify_close"
 	EventNotifyRename EventType = "notify_rename"
+	EventNotifyUnlink EventType = "notify_unlink"
+	EventNotifyTCC    EventType = "notify_tcc"
 )
 
 // ProcessEvent holds normalized telemetry for a process/filesystem event
 type ProcessEvent struct {
-	Type      EventType
-	Timestamp time.Time
-	PID       int
-	PPID      int
-	ExecPath  string
-	ActorPath string
-	MountPath string
-	Args      []string
-	UID       uint32
-	Msg       unsafe.Pointer // Native es_message_t pointer for auth responses
+	Type          EventType
+	Timestamp     time.Time
+	PID           int
+	PPID          int
+	ExecPath      string
+	ActorPath     string
+	MountPath     string
+	DestPath      string
+	TCCService    string
+	TCCIdentity   string
+	Args          []string `json:"-"`
+	ArgsTruncated bool     `json:"-"`
+	UID           uint32
+	Msg           unsafe.Pointer // Native es_message_t pointer for auth responses
 }

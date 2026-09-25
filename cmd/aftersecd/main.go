@@ -2,8 +2,10 @@ package main
 
 import (
 	"aftersec/cmd/aftersecd/modes"
+	"aftersec/pkg/accord"
 	"aftersec/pkg/ai"
 	"aftersec/pkg/binaryauth"
+	"aftersec/pkg/bintrace"
 	"aftersec/pkg/breakglass"
 	"aftersec/pkg/client"
 	"aftersec/pkg/client/storage"
@@ -19,6 +21,7 @@ import (
 	"aftersec/pkg/ransomware"
 	"aftersec/pkg/selfprotect"
 	"aftersec/pkg/tuning"
+	"aftersec/pkg/writeflags"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -29,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -278,9 +282,17 @@ func main() {
 		edrStartupErr = err
 		fmt.Printf("\033[33m[WARN]\033[0m Endpoint Security Sensor Standby (Requires Root & Code Entitlements): %v\n", err)
 	} else {
-		// 0=AUTH_EXEC, 24=NOTIFY_EXEC, 26=NOTIFY_EXIT, 123=NOTIFY_MOUNT
 		fmt.Printf("\033[32m[OK]\033[0m Endpoint Security Framework Driver Active. Subscribed: AUTH_EXEC, NOTIFY_EXEC, NOTIFY_EXIT...\n")
-		err = esConsumer.Subscribe([]uint32{0, 24, 26, 123, edr.NotifyWriteEventCode(), edr.AuthWriteEventCode(), edr.NotifyRenameEventCode()})
+		subscribed := []uint32{
+			edr.AuthExecEventCode(), edr.NotifyExecEventCode(), edr.NotifyExitEventCode(),
+			edr.NotifyMountEventCode(), edr.NotifyWriteEventCode(), edr.AuthWriteEventCode(),
+			edr.NotifyRenameEventCode(), edr.NotifyUnlinkEventCode(), edr.NotifyTCCEventCode(),
+		}
+		err = esConsumer.Subscribe(subscribed)
+		if err != nil {
+			subscribed = subscribed[:len(subscribed)-1]
+			err = esConsumer.Subscribe(subscribed)
+		}
 		if err != nil {
 			edrStartupErr = err
 			log.Printf("Failed to subscribe to ES events: %v", err)
@@ -367,6 +379,21 @@ func main() {
 			log.Fatalf("failed to init local storage: %v", err)
 		}
 		log.Printf("Initialized in STANDALONE mode")
+	}
+
+	if cfg.Daemon.SelfProtection.Enabled {
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			log.Printf("self-protection entitlement check failed: %v", exeErr)
+			if cfg.Daemon.SelfProtection.Required {
+				log.Fatalf("required endpoint entitlement missing: %v", exeErr)
+			}
+		} else if entErr := selfprotect.CheckProcessEntitlements(context.Background(), exe); entErr != nil {
+			log.Printf("self-protection entitlement check failed: %v", entErr)
+			if cfg.Daemon.SelfProtection.Required {
+				log.Fatalf("required endpoint entitlement missing: %v", entErr)
+			}
+		}
 	}
 
 	hostname, _ := os.Hostname()
@@ -629,39 +656,66 @@ func main() {
 
 	// Process ESF events and stream into SQLite
 	fimMonitor := fim.NewMonitor([]string{"/etc", "/Library/LaunchDaemons", "/Library/LaunchAgents"}, 1<<20)
+	writeFlagSet := loadWriteFlags(cfg)
 	fimEvidence := fim.NewEvidenceCapture(1<<20, 4096)
+	accordEngine := accord.NewEngine()
+	accordSem := make(chan struct{}, 8)
 	if esConsumer != nil {
 		go func() {
 			for event := range edrEvents {
 				if event.Type == edr.EventAuthWrite {
-					allow := true
-					if err := fimMonitor.ValidateEvent(fim.Event{
+					fimErr := fimMonitor.ValidateEvent(fim.Event{
 						Path: event.ExecPath, WriterPID: event.PID,
-					}); err == nil {
-						if err := fimEvidence.Begin(event.PID, event.ExecPath); err != nil {
-							log.Printf("FIM before-write evidence failed for %s: %v", event.ExecPath, err)
-							allow = false
+					})
+					var evidenceErr error
+					if fimErr == nil {
+						evidenceErr = fimEvidence.Begin(event.PID, event.ExecPath)
+						if evidenceErr != nil {
+							log.Printf("FIM before-write evidence failed for %s: %v", event.ExecPath, evidenceErr)
 						}
 					}
-					if ransomwareShield != nil && ransomwareCanaries != nil &&
-						ransomwareCanaries.IsCanary(event.ExecPath) {
+					canary := ransomwareShield != nil && ransomwareCanaries != nil && ransomwareCanaries.IsCanary(event.ExecPath)
+					if canary {
 						if err := ransomwareShield.Observe(context.Background(), ransomware.Event{
 							PID: event.PID, Path: event.ExecPath, Canary: true,
 						}); err != nil {
 							log.Printf("Ransomware containment failed for %s: %v", event.ExecPath, err)
 						}
-						allow = false
 					}
+					allow := fim.DecideWrite(fimErr, evidenceErr, canary)
 					if cfg.Daemon.SelfProtection.Enabled {
 						resolved, resolveErr := filepath.EvalSymlinks(event.ExecPath)
 						if resolveErr != nil {
 							resolved = event.ExecPath
 						}
-						selfPath, _ := os.Executable()
-						selfPath, _ = filepath.EvalSymlinks(selfPath)
-						signerTrusted := event.ActorPath != "" && event.ActorPath == selfPath
+						selfPath, execErr := os.Executable()
+						if execErr != nil {
+							log.Printf("self-protection cannot resolve agent binary: %v", execErr)
+						} else if linked, linkErr := filepath.EvalSymlinks(selfPath); linkErr == nil {
+							selfPath = linked
+						}
+						signerTrusted := execErr == nil && event.ActorPath != "" && event.ActorPath == selfPath
 						if tamperGuard.AuthorizeResolvedMutation(event.ExecPath, resolved, signerTrusted) != nil {
 							allow = false
+						}
+						if stopErr := tamperGuard.ClassifyStop(event.Args); stopErr != nil {
+							log.Printf("self-protection denied stop: %v", stopErr)
+							allow = false
+						}
+					}
+					if decision := writeFlagDecision(writeFlagSet, event.ExecPath, event.UID); decision.Effect != writeflags.EffectNone {
+						kind := "monitor"
+						flagSeverity := "info"
+						if decision.Effect == writeflags.EffectDeny {
+							allow = false
+							kind = "restrict"
+							flagSeverity = "critical"
+						}
+						record, _ := json.Marshal(map[string]any{
+							"path": event.ExecPath, "uid": event.UID, "flag": decision.FlagPath, "mode": decision.Mode,
+						})
+						if err := mgr.LogTelemetryEvent("writeflags", kind, flagSeverity, string(record)); err != nil {
+							log.Printf("write flag log failed for %s: %v", event.ExecPath, err)
 						}
 					}
 					if err := esConsumer.RespondAuth(event, allow, false); err != nil {
@@ -695,18 +749,57 @@ func main() {
 						}
 					}
 				}
-				if event.Type == edr.EventNotifyRename && ransomwareShield != nil {
-					count := renameWindow.Add(event.PID, event.Timestamp)
-					if err := ransomwareShield.Observe(context.Background(), ransomware.Event{
-						PID: event.PID, Path: event.ExecPath, RenameCount: count,
-					}); err != nil {
-						log.Printf("Ransomware rename containment failed for %s: %v", event.ExecPath, err)
+				if event.Type == edr.EventNotifyRename || event.Type == edr.EventNotifyUnlink {
+					if event.Type == edr.EventNotifyRename && ransomwareShield != nil {
+						count := renameWindow.Add(event.PID, event.Timestamp)
+						if err := ransomwareShield.Observe(context.Background(), ransomware.Event{
+							PID: event.PID, Path: event.ExecPath, RenameCount: count,
+						}); err != nil {
+							log.Printf("Ransomware rename containment failed for %s: %v", event.ExecPath, err)
+						}
+					}
+					if err := fimMonitor.ValidateEvent(fim.Event{Path: event.ExecPath, WriterPID: event.PID}); err == nil {
+						kind := "rename"
+						if event.Type == edr.EventNotifyUnlink {
+							kind = "unlink"
+						}
+						if ev, renErr := fimEvidence.Rename(event.PID, event.ExecPath, event.DestPath); renErr != nil {
+							log.Printf("FIM %s evidence failed for %s: %v", kind, event.ExecPath, renErr)
+						} else if payload, encErr := json.Marshal(ev); encErr != nil {
+							log.Printf("FIM %s encode failed: %v", kind, encErr)
+						} else if logErr := mgr.LogTelemetryEvent("file_integrity", kind, "high", string(payload)); logErr != nil {
+							log.Printf("FIM %s log failed: %v", kind, logErr)
+						}
+					}
+				}
+				if event.Type == edr.EventNotifyTCC && cfg.Daemon.SelfProtection.Enabled {
+					identity := strings.ToLower(event.TCCIdentity)
+					if strings.Contains(identity, "aftersec") {
+						if err := selfprotect.EntitlementsRevoked([]string{"com.apple.developer.endpoint-security.client"}, nil); err != nil {
+							payload, _ := json.Marshal(map[string]string{"service": event.TCCService, "identity": event.TCCIdentity})
+							log.Printf("self-protection entitlement revocation: %v", err)
+							if logErr := mgr.LogTelemetryEvent("self_protection", "entitlement_revoked", "critical", string(payload)); logErr != nil {
+								log.Printf("entitlement revocation log failed: %v", logErr)
+							}
+						}
 					}
 				}
 				if event.Type == edr.EventNotifyClose {
 					fimEvidence.Cancel(event.PID, event.ExecPath)
 				}
 				if event.Type == edr.EventAuthExec {
+					if cfg.Daemon.SelfProtection.Enabled {
+						if stopErr := tamperGuard.AuthorizeControllerExec(event.ExecPath, event.Args, event.ArgsTruncated); stopErr != nil {
+							log.Printf("self-protection denied controller exec of %s: %v", event.ExecPath, stopErr)
+							if err := esConsumer.RespondAuth(event, false, false); err != nil {
+								log.Printf("Failed to respond to AUTH_EXEC for %s: %v", event.ExecPath, err)
+							}
+							if logErr := mgr.LogTelemetryEvent("self_protection", "service_stop", "critical", event.ExecPath); logErr != nil {
+								log.Printf("service-stop log failed: %v", logErr)
+							}
+							continue
+						}
+					}
 					select {
 					case authExecSem <- struct{}{}:
 						go func(ev edr.ProcessEvent) {
@@ -747,6 +840,64 @@ func main() {
 							detectionJSON, _ := json.Marshal(detection)
 							mgr.LogTelemetryEvent("dns_correlator", "dga_with_persistence", "critical", string(detectionJSON))
 						}
+					}
+				}
+
+				if event.Type == edr.EventNotifyExec {
+					ev := event
+					select {
+					case accordSem <- struct{}{}:
+						go func() {
+							defer func() { <-accordSem }()
+							home, homeErr := accord.HomeForUID(ev.UID)
+							if homeErr != nil {
+								log.Printf("accord refused uid %d: %v", ev.UID, homeErr)
+								return
+							}
+							for _, ob := range accordEngine.Observe(accord.Exec{
+								PID: ev.PID, Path: ev.ExecPath, ParentPath: ev.ActorPath, Home: home,
+							}) {
+								payload, err := json.Marshal(ob)
+								if err != nil {
+									log.Printf("accord encode failed: %v", err)
+									continue
+								}
+								if err := mgr.LogTelemetryEvent("accord", ob.Kind, "high", string(payload)); err != nil {
+									log.Printf("accord log failed: %v", err)
+								}
+							}
+							if bintrace.ShouldCollect(ev.ActorPath, ev.ExecPath) {
+								dossier := bintrace.Collect(ev.ExecPath)
+								decision := bintrace.Reduce(dossier)
+								record, err := json.Marshal(struct {
+									Decision bintrace.Decision `json:"decision"`
+									Format   string            `json:"format"`
+									Libs     int               `json:"libraries"`
+								}{decision, dossier.Format, len(dossier.Libraries)})
+								if err == nil {
+									if logErr := mgr.LogTelemetryEvent("libhunt", "dossier", "info", string(record)); logErr != nil {
+										log.Printf("libhunt log failed: %v", logErr)
+									}
+								}
+								if decision.Promote {
+									ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+									narrative, swarmErr := ai.TriageLibraryDossier(ctx, ai.LibraryTriage{
+										Score: decision.Score, Hard: decision.Hard, Weak: decision.Weak, Format: dossier.Format,
+									})
+									cancel()
+									if swarmErr != nil {
+										log.Printf("libhunt swarm skipped: %v", swarmErr)
+									}
+									if narrative != "" {
+										if logErr := mgr.LogTelemetryEvent("libhunt", "swarm", "high", narrative); logErr != nil {
+											log.Printf("libhunt swarm log failed: %v", logErr)
+										}
+									}
+								}
+							}
+						}()
+					default:
+						log.Printf("accord saturated; skipped %s", event.ExecPath)
 					}
 				}
 

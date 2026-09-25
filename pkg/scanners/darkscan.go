@@ -78,8 +78,10 @@ func ScanMalware(addFinding func(core.Finding)) {
 			Category:    "Malware Scan (Deep Execution)",
 			Name:        "DarkScan Constraints",
 			Description: "DarkScan is enabled but no engines (ClamAV, YARA, CAPA, etc.) are configured. Scan skipped.",
-			Severity:    core.LogOnly,
-			Passed:      true,
+			Severity:    core.Med,
+			Passed:      false,
+			CurrentVal:  "No engines",
+			ExpectedVal: "At least one engine",
 		})
 		return
 	}
@@ -116,19 +118,19 @@ func ScanMalware(addFinding func(core.Finding)) {
 			})
 			continue
 		}
-		
+
 		if res != nil {
 			allResults = append(allResults, res...)
 		}
 	}
-	
+
 	duration := time.Since(scanStart)
 
 	infectedCount := 0
 	for _, result := range allResults {
 		if result.Infected {
 			infectedCount++
-			
+
 			// Map darkscan threats to core findings
 			for _, threat := range result.Threats {
 				severity := core.High
@@ -139,13 +141,13 @@ func ScanMalware(addFinding func(core.Finding)) {
 				}
 
 				addFinding(core.Finding{
-					Category:    "Advanced Malware Analysis",
-					Name:        fmt.Sprintf("%s (%s)", threat.Name, threat.Engine),
-					Description: fmt.Sprintf("Threat detected in %s: %s", result.FilePath, threat.Description),
-					Severity:    severity,
-					Passed:      false,
-					CurrentVal:  "Infected",
-					ExpectedVal: "Clean",
+					Category:          "Advanced Malware Analysis",
+					Name:              fmt.Sprintf("%s (%s)", threat.Name, threat.Engine),
+					Description:       fmt.Sprintf("Threat detected in %s: %s", result.FilePath, threat.Description),
+					Severity:          severity,
+					Passed:            false,
+					CurrentVal:        "Infected",
+					ExpectedVal:       "Clean",
 					RemediationScript: fmt.Sprintf("aftersec malware-scan --quarantine %s", result.FilePath),
 				})
 			}

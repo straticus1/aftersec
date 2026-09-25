@@ -54,6 +54,8 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 		eventType = EventNotifyWrite
 	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_RENAME {
 		eventType = EventNotifyRename
+	} else if msg.event_type == C.ES_EVENT_TYPE_NOTIFY_UNLINK {
+		eventType = EventNotifyUnlink
 	} else if msg.event_type == C.ES_EVENT_TYPE_AUTH_OPEN && bool(C.open_requests_write(msg)) {
 		eventType = EventAuthWrite
 		C.retain_message_safe(msg)
@@ -68,6 +70,11 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 	var execPath string
 	var actorPath string
 	var mountPath string
+	var destPath string
+	var tccService string
+	var tccIdentity string
+	var args []string
+	var argsTruncated bool
 
 	pid := int(C.get_pid(msg))
 	ppid := int(C.get_ppid(msg))
@@ -78,6 +85,21 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 	if length > 0 {
 		actorPath = C.GoStringN(cPath, length)
 		execPath = actorPath
+	}
+	if eventType == EventNotifyExec || eventType == EventAuthExec {
+		var targetLen C.int
+		target := C.get_exec_target_path(msg, &targetLen)
+		if targetLen > 0 {
+			execPath = C.GoStringN(target, targetLen)
+		}
+		args, argsTruncated = copyExecArgs(msg)
+	}
+	var service [256]C.char
+	var identity [1024]C.char
+	if C.copy_tcc_revocation(msg, &service[0], 256, &identity[0], 1024) == 1 {
+		eventType = EventNotifyTCC
+		tccService = C.GoString(&service[0])
+		tccIdentity = C.GoString(&identity[0])
 	}
 
 	// Mount path extraction (only populated if struct contains statfs struct pointer)
@@ -99,6 +121,30 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 		if tLen > 0 {
 			execPath = C.GoStringN(tPath, tLen)
 		}
+		var existingLen C.int
+		existing := C.get_rename_existing_dest(msg, &existingLen)
+		var dirLen C.int
+		dir := C.get_rename_new_dir(msg, &dirLen)
+		var nameLen C.int
+		name := C.get_rename_new_name(msg, &nameLen)
+		existingPath, dirPath, namePath := "", "", ""
+		if existingLen > 0 {
+			existingPath = C.GoStringN(existing, existingLen)
+		}
+		if dirLen > 0 {
+			dirPath = C.GoStringN(dir, dirLen)
+		}
+		if nameLen > 0 {
+			namePath = C.GoStringN(name, nameLen)
+		}
+		destPath = JoinRenameDest(existingPath, dirPath, namePath)
+	}
+	if eventType == EventNotifyUnlink {
+		var tLen C.int
+		tPath := C.get_unlink_path(msg, &tLen)
+		if tLen > 0 {
+			execPath = C.GoStringN(tPath, tLen)
+		}
 	}
 	if eventType == EventAuthWrite {
 		var tLen C.int
@@ -109,17 +155,55 @@ func esEventCallback_cgo(client *C.es_client_t, msg *C.es_message_t) {
 	}
 
 	globalConsumer.events <- ProcessEvent{
-		Type:      eventType,
-		Timestamp: time.Now(),
-		PID:       pid,
-		PPID:      ppid,
-		ExecPath:  execPath,
-		ActorPath: actorPath,
-		MountPath: mountPath,
-		UID:       uid,
-		Msg:       unsafe.Pointer(msg),
+		Type:          eventType,
+		Timestamp:     time.Now(),
+		PID:           pid,
+		PPID:          ppid,
+		ExecPath:      execPath,
+		ActorPath:     actorPath,
+		MountPath:     mountPath,
+		DestPath:      destPath,
+		TCCService:    tccService,
+		TCCIdentity:   tccIdentity,
+		Args:          args,
+		ArgsTruncated: argsTruncated,
+		UID:           uid,
+		Msg:           unsafe.Pointer(msg),
 	}
 }
+
+func copyExecArgs(msg *C.es_message_t) ([]string, bool) {
+	count := int(C.exec_arg_count(msg))
+	if count <= 0 {
+		return nil, false
+	}
+	truncated := count > 64
+	if truncated {
+		count = 64
+	}
+	args := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		var length C.int
+		raw := C.exec_arg(msg, C.int(i), &length)
+		if length <= 0 {
+			continue
+		}
+		if length > 4096 {
+			return args, true
+		}
+		args = append(args, C.GoStringN(raw, length))
+	}
+	return args, truncated
+}
+
+func AuthExecEventCode() uint32    { return uint32(C.auth_exec_event_code()) }
+func NotifyExecEventCode() uint32  { return uint32(C.notify_exec_event_code()) }
+func NotifyExitEventCode() uint32  { return uint32(C.notify_exit_event_code()) }
+func NotifyMountEventCode() uint32 { return uint32(C.notify_mount_event_code()) }
+func NotifyUnlinkEventCode() uint32 {
+	return uint32(C.notify_unlink_event_code())
+}
+func NotifyTCCEventCode() uint32 { return uint32(C.notify_tcc_event_code()) }
 
 // NewESConsumer allocates and initializes a new Apple Endpoint Security client.
 // WARNING: This requires the `com.apple.developer.endpoint-security.client` entitlement.

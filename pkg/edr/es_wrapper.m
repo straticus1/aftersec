@@ -1,6 +1,8 @@
 #import <Foundation/Foundation.h>
 #import <EndpointSecurity/EndpointSecurity.h>
 #import <bsm/libbsm.h>
+#include <limits.h>
+#include <string.h>
 #include <sys/param.h>
 #include <sys/mount.h>
 #import "es_wrapper.h"
@@ -88,6 +90,110 @@ const char* get_rename_path(const es_message_t *msg, int *out_len) {
 
 uint32_t notify_rename_event_code(void) {
     return (uint32_t)ES_EVENT_TYPE_NOTIFY_RENAME;
+}
+
+static int is_exec_event(const es_message_t *msg) {
+    return msg && (msg->event_type == ES_EVENT_TYPE_AUTH_EXEC || msg->event_type == ES_EVENT_TYPE_NOTIFY_EXEC);
+}
+
+const char* get_exec_target_path(const es_message_t *msg, int *out_len) {
+    if (!is_exec_event(msg) || !msg->event.exec.target || !msg->event.exec.target->executable) {
+        *out_len = 0;
+        return "";
+    }
+    *out_len = (int)msg->event.exec.target->executable->path.length;
+    return msg->event.exec.target->executable->path.data;
+}
+
+int exec_arg_count(const es_message_t *msg) {
+    if (!is_exec_event(msg)) return 0;
+    return (int)es_exec_arg_count(&msg->event.exec);
+}
+
+const char* exec_arg(const es_message_t *msg, int index, int *out_len) {
+    if (!is_exec_event(msg) || index < 0 || index >= exec_arg_count(msg)) {
+        *out_len = 0;
+        return "";
+    }
+    es_string_token_t tok = es_exec_arg(&msg->event.exec, (uint32_t)index);
+    if (!tok.data || tok.length > INT_MAX) {
+        *out_len = 0;
+        return "";
+    }
+    *out_len = (int)tok.length;
+    return tok.data;
+}
+
+const char* get_rename_existing_dest(const es_message_t *msg, int *out_len) {
+    if (!msg || msg->event_type != ES_EVENT_TYPE_NOTIFY_RENAME ||
+        msg->event.rename.destination_type != ES_DESTINATION_TYPE_EXISTING_FILE ||
+        !msg->event.rename.destination.existing_file) {
+        *out_len = 0;
+        return "";
+    }
+    *out_len = (int)msg->event.rename.destination.existing_file->path.length;
+    return msg->event.rename.destination.existing_file->path.data;
+}
+
+const char* get_rename_new_dir(const es_message_t *msg, int *out_len) {
+    if (!msg || msg->event_type != ES_EVENT_TYPE_NOTIFY_RENAME ||
+        msg->event.rename.destination_type != ES_DESTINATION_TYPE_NEW_PATH ||
+        !msg->event.rename.destination.new_path.dir) {
+        *out_len = 0;
+        return "";
+    }
+    *out_len = (int)msg->event.rename.destination.new_path.dir->path.length;
+    return msg->event.rename.destination.new_path.dir->path.data;
+}
+
+const char* get_rename_new_name(const es_message_t *msg, int *out_len) {
+    if (!msg || msg->event_type != ES_EVENT_TYPE_NOTIFY_RENAME ||
+        msg->event.rename.destination_type != ES_DESTINATION_TYPE_NEW_PATH) {
+        *out_len = 0;
+        return "";
+    }
+    es_string_token_t tok = msg->event.rename.destination.new_path.filename;
+    if (!tok.data) {
+        *out_len = 0;
+        return "";
+    }
+    *out_len = (int)tok.length;
+    return tok.data;
+}
+
+const char* get_unlink_path(const es_message_t *msg, int *out_len) {
+    if (!msg || msg->event_type != ES_EVENT_TYPE_NOTIFY_UNLINK || !msg->event.unlink.target) {
+        *out_len = 0;
+        return "";
+    }
+    *out_len = (int)msg->event.unlink.target->path.length;
+    return msg->event.unlink.target->path.data;
+}
+
+uint32_t auth_exec_event_code(void) { return (uint32_t)ES_EVENT_TYPE_AUTH_EXEC; }
+uint32_t notify_exec_event_code(void) { return (uint32_t)ES_EVENT_TYPE_NOTIFY_EXEC; }
+uint32_t notify_exit_event_code(void) { return (uint32_t)ES_EVENT_TYPE_NOTIFY_EXIT; }
+uint32_t notify_mount_event_code(void) { return (uint32_t)ES_EVENT_TYPE_NOTIFY_MOUNT; }
+uint32_t notify_unlink_event_code(void) { return (uint32_t)ES_EVENT_TYPE_NOTIFY_UNLINK; }
+uint32_t notify_tcc_event_code(void) { return (uint32_t)ES_EVENT_TYPE_NOTIFY_TCC_MODIFY; }
+
+static void copy_token(es_string_token_t tok, char *dst, int cap) {
+    if (!dst || cap <= 0) return;
+    dst[0] = '\0';
+    if (!tok.data || tok.length == 0) return;
+    int n = (int)tok.length;
+    if (n >= cap) n = cap - 1;
+    memcpy(dst, tok.data, (size_t)n);
+    dst[n] = '\0';
+}
+
+int copy_tcc_revocation(const es_message_t *msg, char *service, int service_cap, char *identity, int identity_cap) {
+    if (!msg || msg->event_type != ES_EVENT_TYPE_NOTIFY_TCC_MODIFY || !msg->event.tcc_modify) return 0;
+    const es_event_tcc_modify_t *ev = msg->event.tcc_modify;
+    if (ev->update_type != ES_TCC_EVENT_TYPE_DELETE && ev->right != ES_TCC_AUTHORIZATION_RIGHT_DENIED) return 0;
+    copy_token(ev->service, service, service_cap);
+    copy_token(ev->identity, identity, identity_cap);
+    return 1;
 }
 
 void retain_message_safe(const es_message_t *msg) {

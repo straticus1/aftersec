@@ -3,6 +3,8 @@ package compliance
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -11,7 +13,7 @@ import (
 type CommandExecutor struct{}
 
 func (CommandExecutor) Run(ctx context.Context, args []string, limit int) ([]byte, error) {
-	if len(args) == 0 || args[0] == "" || limit <= 0 {
+	if len(args) == 0 || args[0] == "" || limit <= 0 || strings.ContainsAny(args[0], " \t|&;<>`$()") || isShell(args[0]) {
 		return nil, ErrInvalidPack
 	}
 	output := &boundedOutput{limit: limit}
@@ -25,6 +27,15 @@ func (CommandExecutor) Run(ctx context.Context, args []string, limit int) ([]byt
 		return nil, ErrOutputTooLarge
 	}
 	return output.data, err
+}
+
+func isShell(program string) bool {
+	switch strings.ToLower(filepath.Base(program)) {
+	case "sh", "bash", "zsh", "dash":
+		return true
+	default:
+		return false
+	}
 }
 
 type boundedOutput struct {

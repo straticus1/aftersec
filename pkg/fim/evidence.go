@@ -70,6 +70,34 @@ func (c *EvidenceCapture) Complete(pid int, path string) (Event, error) {
 	}, nil
 }
 
+// Rename records the bytes at from and, when dest is set, the bytes at the
+// new path. The source is marked removed. A missing regular file is an empty
+// image, not a success that skips the event.
+func (c *EvidenceCapture) Rename(pid int, from, dest string) (Event, error) {
+	if c == nil || pid <= 0 || !filepath.IsAbs(from) {
+		return Event{}, ErrInvalidEvent
+	}
+	clean := filepath.Clean(from)
+	before, err := readEvidence(clean, c.maxContent)
+	if err != nil && !os.IsNotExist(err) {
+		return Event{}, err
+	}
+	event := Event{Path: clean, WriterPID: pid, Before: before, Deleted: true}
+	if dest == "" {
+		return event, nil
+	}
+	if !filepath.IsAbs(dest) {
+		return Event{}, ErrInvalidEvent
+	}
+	event.Dest = filepath.Clean(dest)
+	after, err := readEvidence(event.Dest, c.maxContent)
+	if err != nil && !os.IsNotExist(err) {
+		return Event{}, err
+	}
+	event.After = after
+	return event, nil
+}
+
 func (c *EvidenceCapture) Cancel(pid int, path string) {
 	if c == nil || pid <= 0 || !filepath.IsAbs(path) {
 		return

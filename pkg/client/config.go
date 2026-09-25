@@ -146,6 +146,17 @@ type DetectionConfig struct {
 	PublicKeyBase64 string `yaml:"public_key_base64"`
 }
 
+// ComplianceConfig turns a completed posture scan into signed evidence and,
+// when a pack is configured, runs that signed control pack on the same pass.
+type ComplianceConfig struct {
+	Enabled                bool   `yaml:"enabled"`
+	Required               bool   `yaml:"required"`
+	EvidencePrivateKeyFile string `yaml:"evidence_private_key_file"`
+	PackPath               string `yaml:"pack_path"`
+	PackPublicKeyFile      string `yaml:"pack_public_key_file"`
+	ActiveVersion          uint64 `yaml:"active_version"`
+}
+
 type RansomwareConfig struct {
 	Enabled           bool     `yaml:"enabled"`
 	Required          bool     `yaml:"required"`
@@ -159,6 +170,17 @@ type DeviceControlConfig struct {
 	Required bool              `yaml:"required"`
 	Mode     string            `yaml:"mode"`
 	Allowed  map[string]string `yaml:"allowed"`
+}
+
+type WriteFlagConfig struct {
+	Path      string   `yaml:"path"`
+	Mode      string   `yaml:"mode"`
+	AllowUIDs []uint32 `yaml:"allow_uids"`
+}
+
+type WriteFlagsConfig struct {
+	Enabled bool              `yaml:"enabled"`
+	Flags   []WriteFlagConfig `yaml:"flags"`
 }
 
 type DaemonConfig struct {
@@ -176,7 +198,10 @@ type DaemonConfig struct {
 	BinaryAuth     BinaryAuthorizationConfig `yaml:"binary_authorization"`
 	Ransomware     RansomwareConfig          `yaml:"ransomware"`
 	DeviceControl  DeviceControlConfig       `yaml:"device_control"`
+	WriteFlags     WriteFlagsConfig          `yaml:"write_flags"`
 	Detection      DetectionConfig           `yaml:"detection"`
+	Compliance     ComplianceConfig          `yaml:"compliance"`
+	DisplaySocket  string                    `yaml:"display_socket"`
 }
 
 // ClientConfig represents the client-side configuration

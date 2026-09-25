@@ -50,9 +50,32 @@ func (m *ActionMinter) Mint(ctx context.Context, r MintRequest) (string, error) 
 func roleAllows(role string, a Action) bool {
 	switch role {
 	case "admin":
-		return a == ActionKillProcess || a == ActionCollectFile || a == ActionReadMemory || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine || a == ActionBreakGlass
+		return a == ActionKillProcess || a == ActionCollectFile || a == ActionReadMemory || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine || a == ActionBreakGlass || a == ActionDisplayShot || a == ActionDisplayRecord || a == ActionMarkStolen || a == ActionClearStolen
 	case "security_operator":
-		return a == ActionKillProcess || a == ActionCollectFile || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine
+		return a == ActionKillProcess || a == ActionCollectFile || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine || a == ActionDisplayShot || a == ActionDisplayRecord || a == ActionMarkStolen || a == ActionClearStolen
 	}
 	return false
+}
+
+// MintDelivered re-sends a stolen mark that an operator already authorized.
+// It is not an HTTP entry point and it refuses every other action.
+func (m *ActionMinter) MintDelivered(ctx context.Context, tenant, endpoint string, action Action) (string, error) {
+	if action != ActionMarkStolen && action != ActionClearStolen {
+		return "", fmt.Errorf("remote action is not authorized")
+	}
+	if len(m.key) != ed25519.PrivateKeySize || m.owners == nil || m.now == nil || m.ttl <= 0 || m.ttl > 5*time.Minute || tenant == "" || endpoint == "" {
+		return "", fmt.Errorf("remote action is not authorized")
+	}
+	owner, err := m.owners.OrganizationForEndpoint(ctx, endpoint)
+	if err != nil {
+		return "", fmt.Errorf("resolve endpoint ownership: %w", err)
+	}
+	if owner == "" || owner != tenant {
+		return "", fmt.Errorf("endpoint tenant mismatch")
+	}
+	var id [16]byte
+	if _, err = rand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("generate command ID: %w", err)
+	}
+	return SignActionToken(m.key, ActionClaims{ID: hex.EncodeToString(id[:]), TenantID: tenant, EndpointID: endpoint, Action: action, ExpiresAt: m.now().Add(m.ttl)})
 }

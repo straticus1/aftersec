@@ -10,9 +10,9 @@ import (
 	"os"
 	"time"
 
-	"aftersec/pkg/threatintel"
-	"aftersec/pkg/forensics"
 	"aftersec/pkg/darkscan"
+	"aftersec/pkg/forensics"
+	"aftersec/pkg/threatintel"
 )
 
 type Verdict string
@@ -23,9 +23,9 @@ const (
 )
 
 type AnalysisResult struct {
-	Hash             string  `json:"hash"`
-	Verdict          Verdict `json:"verdict"`
-	Score            int     `json:"score"`
+	Hash             string   `json:"hash"`
+	Verdict          Verdict  `json:"verdict"`
+	Score            int      `json:"score"`
 	ThreatIntelMatch bool     `json:"threat_intel_match"`
 	Source           string   `json:"source,omitempty"` // "filehashes", "darkapi", "local"
 	FlossStrings     []string `json:"floss_strings,omitempty"`
@@ -152,7 +152,7 @@ func (e *Engine) Analyze(r io.Reader) (*AnalysisResult, error) {
 	if forensics.IsFlossInstalled() {
 		flossCtx, flossCancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer flossCancel()
-		
+
 		flossRes, err := forensics.ExtractFLOSS(flossCtx, tmpFile.Name())
 		if err == nil && flossRes != nil {
 			log.Printf("🧬 [FLOSS] Deobfuscated strings extracted for %s", hashStr[:16])
@@ -165,12 +165,12 @@ func (e *Engine) Analyze(r io.Reader) (*AnalysisResult, error) {
 	// Phase 4.5: Microscopic CPU Sandbox (Unicorn)
 	emuCtx, emuCancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer emuCancel()
-	
+
 	emuRes, err := forensics.EmulateMachO(emuCtx, tmpFile.Name())
 	if err == nil && emuRes != nil {
-		log.Printf("🦄 [EMULATOR] Mapped Mach-O and emulated %d instructions (Syscalls: %d, Loops: %d)", 
+		log.Printf("🦄 [EMULATOR] Mapped Mach-O and emulated %d instructions (Syscalls: %d, Loops: %d)",
 			emuRes.Instructions, emuRes.Syscalls, emuRes.UnpackingLoops)
-		
+
 		if emuRes.Score >= 50 {
 			result.Verdict = VerdictDeny
 			result.Score = 100
@@ -188,7 +188,7 @@ func (e *Engine) Analyze(r io.Reader) (*AnalysisResult, error) {
 	if e.dsClient != nil && result.Verdict == VerdictAllow {
 		dsCtx, dsCancel := context.WithTimeout(ctx, 45*time.Second)
 		defer dsCancel()
-		
+
 		scanRes, err := e.dsClient.ScanFile(dsCtx, tmpFile.Name())
 		if err == nil && scanRes != nil && scanRes.Infected {
 			result.Verdict = VerdictDeny
@@ -215,25 +215,24 @@ func (e *Engine) SubmitToGlobalIntel(ctx context.Context, hash string, threatLev
 		return fmt.Errorf("FileHashes.io client not configured")
 	}
 
-	// Get geolocation for submission metadata
-	geo, err := threatintel.GetGeoLocation(ctx)
-	if err != nil {
-		log.Printf("⚠️ [GEOLOCATION] Failed to get location: %v, using fallback", err)
-		geo = threatintel.GetGeoLocationFallback()
-	}
-
 	submission := &threatintel.HashSubmission{
-		Hash:             hash,
-		Algorithm:        "sha256",
-		ThreatLevel:      threatLevel,
-		SignedStatus:     signed,
-		SubmittedCountry: geo.Country,
-		SubmittedState:   geo.State,
-		SubmittedISP:     geo.ISP,
-		FileSize:         fileSize,
-		FileName:         fileName,
-		DetectedBy:       detectedBy,
-		Timestamp:        time.Now(),
+		Hash:         hash,
+		Algorithm:    "sha256",
+		ThreatLevel:  threatLevel,
+		SignedStatus: signed,
+		FileSize:     fileSize,
+		FileName:     fileName,
+		DetectedBy:   detectedBy,
+		Timestamp:    time.Now(),
+	}
+	country := ""
+	if geo, err := threatintel.GetGeoLocation(ctx); err != nil {
+		log.Printf("geolocation unavailable: %v", err)
+	} else {
+		submission.SubmittedCountry = geo.Country
+		submission.SubmittedState = geo.State
+		submission.SubmittedISP = geo.ISP
+		country = geo.Country
 	}
 
 	if err := e.fileHashesClient.SubmitHash(ctx, submission); err != nil {
@@ -241,7 +240,7 @@ func (e *Engine) SubmitToGlobalIntel(ctx context.Context, hash string, threatLev
 	}
 
 	log.Printf("📤 [FILEHASHES] Submitted hash %s to global database (ThreatLevel: %d, Country: %s)",
-		hash[:16], threatLevel, geo.Country)
+		hash[:16], threatLevel, country)
 
 	return nil
 }

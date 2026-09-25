@@ -13,21 +13,25 @@ import (
 type Action string
 
 const (
-	ActionKillProcess     Action = "kill_process"
-	ActionCollectFile     Action = "collect_file"
-	ActionReadMemory      Action = "read_memory"
-	ActionListPersistence Action = "list_persistence"
-	ActionQuarantine      Action = "quarantine"
+	ActionKillProcess       Action = "kill_process"
+	ActionCollectFile       Action = "collect_file"
+	ActionReadMemory        Action = "read_memory"
+	ActionListPersistence   Action = "list_persistence"
+	ActionQuarantine        Action = "quarantine"
 	ActionReleaseQuarantine Action = "release_quarantine"
 	ActionBreakGlass        Action = "break_glass"
+	ActionDisplayShot       Action = "display_shot"
+	ActionDisplayRecord     Action = "display_record"
+	ActionMarkStolen        Action = "mark_stolen"
+	ActionClearStolen       Action = "clear_stolen"
 )
 
 type ActionClaims struct {
-	ID         string    `json:"id"`
-	TenantID   string    `json:"tenant_id"`
-	EndpointID string    `json:"endpoint_id"`
-	Action     Action    `json:"action"`
-	ExpiresAt  time.Time `json:"expires_at"`
+	ID         string            `json:"id"`
+	TenantID   string            `json:"tenant_id"`
+	EndpointID string            `json:"endpoint_id"`
+	Action     Action            `json:"action"`
+	ExpiresAt  time.Time         `json:"expires_at"`
 	Arguments  map[string]string `json:"arguments,omitempty"`
 }
 type signedAction struct {
@@ -123,8 +127,37 @@ func validClaims(c ActionClaims) bool {
 			}
 		}
 		return true
+	case ActionDisplayShot, ActionMarkStolen, ActionClearStolen:
+		return len(c.Arguments) == 0
+	case ActionDisplayRecord:
+		_, err := ParseRecordSeconds(c.Arguments)
+		return err == nil
 	}
 	return false
+}
+
+// ParseRecordSeconds accepts only a decimal seconds value from 1 through 60.
+func ParseRecordSeconds(args map[string]string) (int, error) {
+	if len(args) != 1 {
+		return 0, fmt.Errorf("display recording duration is required")
+	}
+	raw := args["seconds"]
+	if raw == "" || len(raw) > 2 {
+		return 0, fmt.Errorf("display recording must be between 1 and 60 seconds")
+	}
+	for _, c := range raw {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("display recording must be between 1 and 60 seconds")
+		}
+	}
+	n := 0
+	for _, c := range raw {
+		n = n*10 + int(c-'0')
+	}
+	if n < 1 || n > 60 {
+		return 0, fmt.Errorf("display recording must be between 1 and 60 seconds")
+	}
+	return n, nil
 }
 
 func cloneArguments(in map[string]string) map[string]string {

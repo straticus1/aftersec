@@ -21,6 +21,8 @@ import (
 type mockEnterprise struct {
 	dispatched  []*grpcapi.ServerCommand
 	dispatchErr error
+	noted       []string
+	forgotten   []string
 }
 
 func (m *mockEnterprise) DispatchCommand(_ string, cmd *grpcapi.ServerCommand) error {
@@ -33,6 +35,14 @@ func (m *mockEnterprise) DispatchCommand(_ string, cmd *grpcapi.ServerCommand) e
 
 func (m *mockEnterprise) QueueSigmaPack(_ detection.SignedPack, _ time.Time) error {
 	return nil
+}
+
+func (m *mockEnterprise) NoteDisplayCommand(endpointID, commandID, action string) {
+	m.noted = append(m.noted, endpointID+" "+commandID+" "+action)
+}
+
+func (m *mockEnterprise) ForgetDisplayCommand(endpointID, commandID string) {
+	m.forgotten = append(m.forgotten, endpointID+" "+commandID)
 }
 
 type mockActionMinter struct {

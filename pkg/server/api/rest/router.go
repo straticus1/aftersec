@@ -9,14 +9,16 @@ import (
 
 	grpcapi "aftersec/pkg/api/grpc"
 	"aftersec/pkg/billing"
-	"aftersec/pkg/detection"
 	"aftersec/pkg/darkscan"
+	"aftersec/pkg/detection"
 	"aftersec/pkg/ratelimit"
 	"aftersec/pkg/response"
 	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/clamav"
+	"aftersec/pkg/server/displayframes"
 	grpcserver "aftersec/pkg/server/grpc"
 	"aftersec/pkg/server/repository"
+	"aftersec/pkg/server/stolen"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -24,6 +26,8 @@ import (
 type enterpriseServer interface {
 	DispatchCommand(endpointID string, cmd *grpcapi.ServerCommand) error
 	QueueSigmaPack(pack detection.SignedPack, now time.Time) error
+	NoteDisplayCommand(endpointID, commandID, action string)
+	ForgetDisplayCommand(endpointID, commandID string)
 }
 
 type RemoteActionMinter interface {
@@ -46,6 +50,8 @@ type Router struct {
 	darkwebLimiter  *ratelimit.RedisRateLimiter
 	actionMinter    RemoteActionMinter
 	actionAudit     RemoteActionAudit
+	frames          *displayframes.Store
+	stolen          *stolen.Registry
 }
 
 // SetActionMinter enables signed remote response. A nil minter leaves the
@@ -56,6 +62,14 @@ func (r *Router) SetActionMinter(minter RemoteActionMinter) {
 
 func (r *Router) SetActionAudit(audit RemoteActionAudit) {
 	r.actionAudit = audit
+}
+
+func (r *Router) SetDisplayFrames(store *displayframes.Store) {
+	r.frames = store
+}
+
+func (r *Router) SetStolenRegistry(reg *stolen.Registry) {
+	r.stolen = reg
 }
 
 // NewRouter initializes a fresh API layout.
@@ -142,6 +156,7 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 
 	// MDM Remote Action — dispatches a command to the endpoint's active gRPC stream
 	mux.HandleFunc("/api/v1/endpoints/action", jwtManager.HTTPMiddleware(router.handleEndpointAction))
+	mux.HandleFunc("/api/v1/display/frames", jwtManager.HTTPMiddleware(router.handleDisplayFrame))
 
 	// Sigma API
 	mux.HandleFunc("/api/v1/sigma/deploy", jwtManager.HTTPMiddleware(router.handleSigmaDeploy))

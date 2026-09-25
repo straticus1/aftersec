@@ -33,7 +33,7 @@ func isQuietHour(cfg *client.ClientConfig) bool {
 	nowMinutes := now.Hour()*60 + now.Minute()
 	startMinutes := start.Hour()*60 + start.Minute()
 	endMinutes := end.Hour()*60 + end.Minute()
-	
+
 	if startMinutes <= endMinutes {
 		return nowMinutes >= startMinutes && nowMinutes <= endMinutes
 	}
@@ -49,7 +49,7 @@ func RunStandalone(cfg *client.ClientConfig, mgr storage.Manager) {
 			log.Fatalf("API server failed: %v", err)
 		}
 	}()
-	
+
 	alertChan := make(chan forensics.SyscallAlert, 100)
 	go func() {
 		log.Println("Starting continuous syscall monitoring via dtrace...")
@@ -77,7 +77,7 @@ func RunStandalone(cfg *client.ClientConfig, mgr storage.Manager) {
 			if alert.Score.String() == "HIGH" && !cfg.Daemon.Alerts.AlertOnHigh {
 				continue
 			}
-			msg := fmt.Sprintf("[%s] SYSTEM ALERT | PID: %d | CMD: %s | PATTERN: %s | SEVERITY: %s\n", 
+			msg := fmt.Sprintf("[%s] SYSTEM ALERT | PID: %d | CMD: %s | PATTERN: %s | SEVERITY: %s\n",
 				alert.Timestamp.Format(time.RFC3339), alert.PID, alert.Command, alert.Pattern, alert.Score)
 			log.Print(msg)
 			if f != os.Stdout {
@@ -90,7 +90,7 @@ func RunStandalone(cfg *client.ClientConfig, mgr storage.Manager) {
 				analysis, err := ai.AnalyzeThreat(context.Background(), msg)
 				if err == nil {
 					log.Printf("🤖 \033[36m[AI Analysis Result]:\n%s\033[0m\n", analysis)
-					
+
 					// Fire macOS Desktop Alert via AppleScript
 					appleScript := `display notification "AI Flagged a High-Severity Process Anomaly" with title "AfterSec EDR" subtitle "Critical Alert" sound name "Basso"`
 					_ = exec.Command("osascript", "-e", appleScript).Run()
@@ -102,7 +102,7 @@ func RunStandalone(cfg *client.ClientConfig, mgr storage.Manager) {
 	// Unified Logging Stream (Authd & TCC Privacy)
 	logContext, logCancel := context.WithCancel(context.Background())
 	defer logCancel()
-	
+
 	logAlerts := make(chan edr.LogEvent, 100)
 	go func() {
 		fmt.Println("\033[36m[OK]\033[0m Starting macOS Unified Logging stream (TCC Sandbox, Authd)...")
@@ -113,11 +113,11 @@ func RunStandalone(cfg *client.ClientConfig, mgr storage.Manager) {
 
 	go func() {
 		for event := range logAlerts {
-			msg := fmt.Sprintf("[\033[33mUNIFIED LOG\033[0m] %s | Subsystem: %s | Process: %s | Message: %s\n", 
+			msg := fmt.Sprintf("[\033[33mUNIFIED LOG\033[0m] %s | Subsystem: %s | Process: %s | Message: %s\n",
 				event.Timestamp, event.Subsystem, event.ProcessImage, event.EventMessage)
 			// Print routine Unified Log captures
 			fmt.Print(msg)
-			
+
 			// Let's pass Auth failures or TCC prompts selectively to Genkit
 			lowerMsg := strings.ToLower(event.EventMessage)
 			if strings.Contains(lowerMsg, "denied") || strings.Contains(lowerMsg, "failed") || strings.Contains(lowerMsg, "unauthorized") {
@@ -145,7 +145,7 @@ func RunStandalone(cfg *client.ClientConfig, mgr storage.Manager) {
 			log.Printf("[%s] skipping scan due to quiet hours configuration", time.Now().Format(time.RFC3339))
 			return
 		}
-		
+
 		if cfg.Daemon.Scheduling.Adaptive {
 			// Stub: Here we would check system load and backoff if max_cpu_percent is exceeded
 			log.Printf("[%s] adaptive scheduling active (MaxCPU: %d%%)", time.Now().Format(time.RFC3339), cfg.Daemon.Resources.MaxCPUPercent)
@@ -184,7 +184,7 @@ func RunStandalone(cfg *client.ClientConfig, mgr storage.Manager) {
 				analysis, err := ai.AnalyzeThreat(context.Background(), driftJSON)
 				if err == nil {
 					log.Printf("🤖 \033[36m[AI Report]:\n%s\033[0m\n", analysis)
-					
+
 					appleScript := `display notification "Baseline Security Drift Detected" with title "AfterSec Compliance" subtitle "Drift Alert" sound name "Ping"`
 					_ = exec.Command("osascript", "-e", appleScript).Run()
 				} else {
@@ -200,6 +200,7 @@ func RunStandalone(cfg *client.ClientConfig, mgr storage.Manager) {
 		if err := mgr.SaveCommit(currentState); err != nil {
 			log.Printf("failed to save commit: %v", err)
 		}
+		publishCompliance(cfg, hostnameOrUnknown(), currentState, mgr)
 	}
 
 	runScan()

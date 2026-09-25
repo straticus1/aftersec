@@ -1,0 +1,15 @@
+package attestation
+
+import "fmt"
+
+// marshalP256PKIX wraps an uncompressed SEC1 P-256 point in SubjectPublicKeyInfo.
+func marshalP256PKIX(point []byte) ([]byte, error) {
+	if len(point) != 65 || point[0] != 0x04 {
+		return nil, fmt.Errorf("secure enclave public key is not an uncompressed P-256 point")
+	}
+	header := []byte{
+		0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
+		0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+	}
+	return append(header, point...), nil
+}

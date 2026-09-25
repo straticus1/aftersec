@@ -21,6 +21,7 @@ var (
 
 type Event struct {
 	Path      string
+	Dest      string
 	WriterPID int
 	Before    []byte
 	After     []byte

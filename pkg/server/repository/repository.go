@@ -8,6 +8,7 @@ type Repositories struct {
 	Scans             *ScanRepository
 	SilenceIncidents  *SilenceIncidentRepository
 	RemoteActionAudit *RemoteResponseAuditRepository
+	FleetAlerts       *FleetAlertRepository
 }
 
 func NewRepositories(db *sql.DB) *Repositories {
@@ -17,5 +18,6 @@ func NewRepositories(db *sql.DB) *Repositories {
 		Scans:             NewScanRepository(db),
 		SilenceIncidents:  NewSilenceIncidentRepository(db),
 		RemoteActionAudit: NewRemoteResponseAuditRepository(db),
+		FleetAlerts:       NewFleetAlertRepository(db),
 	}
 }

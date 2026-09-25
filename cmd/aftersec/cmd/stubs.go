@@ -153,26 +153,56 @@ var daemonStatusCmd = &cobra.Command{
 }
 
 var enrollCmd = &cobra.Command{
-	Use:   "enroll",
-	Short: "Enroll this endpoint into an AfterSec Management Server",
+	Use:   "enroll <code>",
+	Short: "Enroll this endpoint with a hardware attestation quote",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if globalCfg == nil || globalCfg.Mode != client.ModeEnterprise {
 			return fmt.Errorf("enterprise mode is required for enrollment")
+		}
+		if len(args) != 1 || args[0] == "" || globalCfg.TenantID == "" || globalCfg.Server == nil || globalCfg.Server.TLS.CA == "" || globalCfg.Storage.Path == "" {
+			return fmt.Errorf("enrollment code, tenant id, management CA, and storage path are required")
+		}
+		caPEM, err := os.ReadFile(globalCfg.Server.TLS.CA)
+		if err != nil {
+			return fmt.Errorf("read management CA: %w", err)
+		}
+		if len(caPEM) == 0 || len(caPEM) > 1<<20 {
+			return fmt.Errorf("management CA is empty or too large")
+		}
+		provider, err := client.NewHardwareEvidenceProvider()
+		if err != nil {
+			return fmt.Errorf("hardware attestation is required: %w", err)
+		}
+		hardwareID, err := provider.Prepare(cmd.Context())
+		if err != nil {
+			return fmt.Errorf("hardware attestation is required: %w", err)
+		}
+		store, err := client.NewPlatformCredentialStore("production", globalCfg.Storage.Path, hardwareID)
+		if err != nil {
+			return err
 		}
 		grpcClient, err := client.NewEnterpriseClient(globalCfg)
 		if err != nil {
 			return err
 		}
 		defer grpcClient.Close()
-		hostname, _ := os.Hostname()
-		resp, err := grpcClient.Enroll(cmd.Context(), "local", hostname, runtime.GOOS+"/"+runtime.GOARCH)
+		hostname, err := os.Hostname()
+		if err != nil {
+			return fmt.Errorf("read hostname: %w", err)
+		}
+		resp, err := grpcClient.EnrollAttested(cmd.Context(), provider, store, caPEM, client.EnrollmentDetails{
+			OrganizationID: globalCfg.TenantID,
+			EnrollmentCode: args[0],
+			HardwareID:     hardwareID,
+			Hostname:       hostname,
+			OSVersion:      runtime.GOOS + "/" + runtime.GOARCH,
+			AgentVersion:   "1.0.0",
+		})
 		if err != nil {
 			return err
 		}
-		if resp == nil || !resp.Success {
-			return fmt.Errorf("enrollment was rejected")
-		}
-		return printOutput(resp)
+		return printOutput(map[string]any{"enrolled": true, "tenant_id": resp.TenantId})
 	},
 }
 

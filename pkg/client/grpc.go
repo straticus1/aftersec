@@ -133,6 +133,27 @@ func (c *EnterpriseClient) StreamEvents(ctx context.Context) (grpcapi.Enterprise
 	return c.grpcClient.StreamEvents(ctx)
 }
 
+// SendStolenCamera uploads one camera frame. The server stores it only when
+// this endpoint is marked stolen, and the returned payload never includes the
+// picture. True means the server kept the frame.
+func (c *EnterpriseClient) SendStolenCamera(ctx context.Context, tenantID, hwID, payload string) (bool, error) {
+	stream, err := c.StreamEvents(ctx)
+	if err != nil {
+		return false, err
+	}
+	if err = stream.Send(&grpcapi.ClientEvent{
+		TenantId: tenantID, HardwareId: hwID, Timestamp: time.Now().Unix(),
+		EventType: "stolen_camera", Payload: payload,
+	}); err != nil {
+		return false, err
+	}
+	ack, err := stream.CloseAndRecv()
+	if err != nil {
+		return false, err
+	}
+	return ack.GetMessage() == "stolen camera stored" && ack.GetEventsProcessed() > 0, nil
+}
+
 // ConnectCommandStream initiates the persistent bi-directional MDM queue
 func (c *EnterpriseClient) ConnectCommandStream(ctx context.Context) (grpcapi.EnterpriseService_ConnectCommandStreamClient, error) {
 	return c.grpcClient.ConnectCommandStream(ctx)
@@ -146,10 +167,9 @@ func (c *EnterpriseClient) StreamTelemetryBatch(ctx context.Context, tenantID, h
 	}
 
 	for _, ev := range events {
-		var unixTime int64
-		// Dynamic typing helper to handle SQL timestamp parsing
-		if ts, ok := ev["timestamp"].(time.Time); ok {
-			unixTime = ts.Unix()
+		unixTime, err := TelemetryUnix(ev["timestamp"])
+		if err != nil {
+			return 0, fmt.Errorf("telemetry timestamp: %w", err)
 		}
 
 		eventType, _ := ev["event_type"].(string)

@@ -176,8 +176,28 @@ func (rt *Router) handleEndpointAction(w http.ResponseWriter, r *http.Request) {
 		Action:    "REMOTE_ACTION",
 		Payload:   token,
 	}
+	if req.Action == response.ActionDisplayShot || req.Action == response.ActionDisplayRecord {
+		rt.enterpriseSrv.NoteDisplayCommand(req.EndpointID, cmdID, string(req.Action))
+	}
+	if req.Action == response.ActionMarkStolen || req.Action == response.ActionClearStolen {
+		if rt.stolen == nil {
+			http.Error(w, "Stolen device protection is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var markErr error
+		if req.Action == response.ActionMarkStolen {
+			markErr = rt.stolen.Mark(claims.OrganizationID, req.EndpointID)
+		} else {
+			markErr = rt.stolen.Clear(claims.OrganizationID, req.EndpointID)
+		}
+		if markErr != nil {
+			http.Error(w, "Stolen mark could not be recorded", http.StatusServiceUnavailable)
+			return
+		}
+	}
 
 	if err := rt.enterpriseSrv.DispatchCommand(req.EndpointID, cmd); err != nil {
+		rt.enterpriseSrv.ForgetDisplayCommand(req.EndpointID, cmdID)
 		auditErr := rt.actionAudit.AppendDispatch(r.Context(), response.AuditEvent{
 			CommandID:  cmdID,
 			TenantID:   claims.OrganizationID,

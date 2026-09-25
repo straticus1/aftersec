@@ -22,6 +22,29 @@ func TestActionMinterRejectsRoleActionAndCrossTenant(t *testing.T) {
 		}
 	}
 }
+func TestActionMinterDisplayIsOperatorScoped(t *testing.T) {
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	m := NewActionMinter(key, ownerLookup{"ep": "org"}, time.Minute, time.Now)
+	if _, err := m.Mint(context.Background(), MintRequest{Role: "viewer", TenantID: "org", EndpointID: "ep", Action: ActionMarkStolen}); err == nil {
+		t.Fatal("viewer marked a device stolen")
+	}
+	if _, err := m.MintDelivered(context.Background(), "org", "ep", ActionKillProcess); err == nil {
+		t.Fatal("delivered mint accepted a process kill")
+	}
+	if _, err := m.Mint(context.Background(), MintRequest{Role: "viewer", TenantID: "org", EndpointID: "ep", Action: ActionDisplayShot}); err == nil {
+		t.Fatal("viewer minted a display shot")
+	}
+	if _, err := m.Mint(context.Background(), MintRequest{Role: "security_operator", TenantID: "org", EndpointID: "ep", Action: ActionDisplayRecord, Arguments: map[string]string{"seconds": "90"}}); err == nil {
+		t.Fatal("long recording minted")
+	}
+	if _, err := m.Mint(context.Background(), MintRequest{Role: "security_operator", TenantID: "org", EndpointID: "ep", Action: ActionDisplayShot, Arguments: map[string]string{"args": "-x"}}); err == nil {
+		t.Fatal("display shot accepted arguments")
+	}
+	if _, err := m.Mint(context.Background(), MintRequest{Role: "admin", TenantID: "org", EndpointID: "ep", Action: ActionDisplayRecord, Arguments: map[string]string{"seconds": "30"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestActionMinterBreakGlassIsAdminOnly(t *testing.T) {
 	_, key, _ := ed25519.GenerateKey(rand.Reader)
 	m := NewActionMinter(key, ownerLookup{"ep": "org"}, time.Minute, time.Now)

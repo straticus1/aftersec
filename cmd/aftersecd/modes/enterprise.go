@@ -17,6 +17,7 @@ import (
 	"aftersec/pkg/client"
 	"aftersec/pkg/client/storage"
 	"aftersec/pkg/detection"
+	"aftersec/pkg/display"
 	"aftersec/pkg/forensics"
 	"aftersec/pkg/response"
 	"aftersec/pkg/scanners"
@@ -43,6 +44,16 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager, glass *breakgl
 		} else {
 			quarantine := response.NewQuarantineManager(response.NewPlatformFirewall())
 			runner := response.NewSystemActionRunner(quarantine, 1<<20).WithBreakGlass(glass)
+			socketPath := cfg.Daemon.DisplaySocket
+			if socketPath == "" {
+				socketPath = os.Getenv("AFTERSEC_DISPLAY_SOCKET")
+			}
+			if socketPath != "" {
+				session := display.NewClient(socketPath)
+				runner = runner.WithDisplay(session).WithStolen(session)
+				log.Print("display capture requests will use the user-session agent")
+				go uploadStolenPhotos(grpcClient, session, cfg.TenantID, "HW-"+hostnameOrUnknown())
+			}
 			executor := response.NewActionExecutor(ed25519.PublicKey(keyBytes), cfg.TenantID, "HW-"+hostnameOrUnknown(), runner, 1<<20, time.Now)
 			processor := client.NewCommandProcessor(cfg.TenantID, "HW-"+hostnameOrUnknown(), executor, 1<<20)
 			go func() {
@@ -89,6 +100,8 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager, glass *breakgl
 			}
 		}
 
+		publishCompliance(cfg, hwID, currentState, mgr)
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -98,6 +111,9 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager, glass *breakgl
 			return
 		}
 
+		if resp.Action == "MARK_STOLEN" || resp.Action == "CLEAR_STOLEN" {
+			applyStolenHeartbeat(socketFrom(cfg), resp.Action)
+		}
 		if strings.HasPrefix(resp.Action, "RUN_SIGMA::") {
 			log.Printf("refusing unsigned Sigma heartbeat")
 			return

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -13,18 +14,78 @@ import (
 	grpcapi "aftersec/pkg/api/grpc"
 	"aftersec/pkg/attestation"
 	"aftersec/pkg/darkscan"
+	"aftersec/pkg/fleetcorrelation"
+	"aftersec/pkg/geoip"
 	"aftersec/pkg/response"
 	"aftersec/pkg/selfprotect"
 	"aftersec/pkg/server/api/rest"
 	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/clamav"
 	"aftersec/pkg/server/database"
+	"aftersec/pkg/server/displayframes"
 	grpcserver "aftersec/pkg/server/grpc"
 	"aftersec/pkg/server/repository"
+	"aftersec/pkg/server/stolen"
 	"aftersec/pkg/server/tlsconfig"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 )
+
+func openGeoResolver() (*geoip.Resolver, error) {
+	city := os.Getenv("AFTERSEC_GEOIP_CITY_DB")
+	asn := os.Getenv("AFTERSEC_GEOIP_ASN_DB")
+	required := os.Getenv("AFTERSEC_GEOIP_REQUIRED") == "true"
+	if city == "" && asn == "" {
+		if required {
+			return nil, fmt.Errorf("AFTERSEC_GEOIP_REQUIRED is set and no database path is configured")
+		}
+		return nil, nil
+	}
+	resolver, err := geoip.Open(city, asn)
+	if err != nil {
+		return nil, err
+	}
+	if os.Getenv("AFTERSEC_GEOIP_PTR") == "true" {
+		resolver.EnablePTR()
+	}
+	return resolver, nil
+}
+
+func openStolenRegistry() *stolen.Registry {
+	dir := os.Getenv("AFTERSEC_STOLEN_DIR")
+	explicit := dir != ""
+	if dir == "" {
+		dir = filepath.Join("data", "stolen")
+	}
+	reg, err := stolen.Open(dir)
+	if err != nil {
+		if explicit {
+			log.Fatalf("stolen device registry: %v", err)
+		}
+		log.Printf("stolen device registry disabled: %v", err)
+		return nil
+	}
+	log.Print("stolen device marks will be recorded")
+	return reg
+}
+
+func openDisplayFrames() *displayframes.Store {
+	dir := os.Getenv("AFTERSEC_DISPLAY_DIR")
+	explicit := dir != ""
+	if dir == "" {
+		dir = filepath.Join("data", "display-frames")
+	}
+	store, err := displayframes.Open(dir)
+	if err != nil {
+		if explicit {
+			log.Fatalf("display frame store: %v", err)
+		}
+		log.Printf("display frame store disabled: %v", err)
+		return nil
+	}
+	log.Print("display frames will be stored for signed capture requests")
+	return store
+}
 
 func main() {
 	log.Println("Starting AfterSec Management Server...")
@@ -54,6 +115,9 @@ func main() {
 	}
 	if err := dbClient.RunMigrations("migrations/005_remote_response_audit_lifecycle.up.sql"); err != nil {
 		log.Fatalf("Remote response lifecycle migration failed: %v", err)
+	}
+	if err := dbClient.RunMigrations("migrations/006_fleet_correlation_alerts.up.sql"); err != nil {
+		log.Fatalf("Fleet correlation migration failed: %v", err)
 	}
 
 	repos := repository.NewRepositories(dbClient.DB)
@@ -111,6 +175,14 @@ func main() {
 	heartbeatTracker := selfprotect.NewTracker(5*time.Minute, 2*time.Minute, repos.SilenceIncidents)
 	enterpriseSrv.SetHeartbeatTracker(heartbeatTracker)
 	enterpriseSrv.SetCommandResultAudit(repos.RemoteActionAudit)
+	enterpriseSrv.SetFleetCorrelation(fleetcorrelation.NewEngine(time.Hour, 10000, 2), repos.FleetAlerts)
+	if resolver, err := openGeoResolver(); err != nil {
+		log.Fatalf("GeoIP database: %v", err)
+	} else if resolver != nil {
+		defer resolver.Close()
+		enterpriseSrv.SetGeoResolver(resolver)
+		log.Println("GeoIP lookups enabled")
+	}
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
@@ -143,14 +215,21 @@ func main() {
 	}
 
 	// 2. Start basic REST API
+	frames := openDisplayFrames()
+	enterpriseSrv.SetDisplayFrames(frames)
+	stolenReg := openStolenRegistry()
 	mux := rest.NewRouter(jwtManager, repos, enterpriseSrv, clamavStorage, clamavUpdater, darkscanClient, redisClient)
 	mux.SetActionAudit(repos.RemoteActionAudit)
+	mux.SetDisplayFrames(frames)
+	mux.SetStolenRegistry(stolenReg)
 	if keyPath := os.Getenv("REMOTE_ACTION_SIGNING_KEY_PATH"); keyPath != "" {
 		key, keyErr := os.ReadFile(keyPath)
 		if keyErr != nil || len(key) != ed25519.PrivateKeySize {
 			log.Printf("Remote response disabled: signing key is unavailable or invalid")
 		} else {
-			mux.SetActionMinter(response.NewActionMinter(ed25519.PrivateKey(key), repos.Endpoints, 2*time.Minute, time.Now))
+			minter := response.NewActionMinter(ed25519.PrivateKey(key), repos.Endpoints, 2*time.Minute, time.Now)
+			mux.SetActionMinter(minter)
+			enterpriseSrv.SetStolen(stolenReg, minter)
 			log.Println("Signed remote response enabled")
 		}
 	} else {

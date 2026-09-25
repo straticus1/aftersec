@@ -15,7 +15,8 @@ import (
 // MacOSScanner is named for API compatibility with the darwin side.
 // On Linux it runs the equivalent CIS benchmark checks.
 type MacOSScanner struct {
-	db storage.Manager
+	db      storage.Manager
+	Profile string
 }
 
 func NewMacOSScanner(db storage.Manager) *MacOSScanner {
@@ -23,6 +24,9 @@ func NewMacOSScanner(db storage.Manager) *MacOSScanner {
 }
 
 func (s *MacOSScanner) Scan(progress func(float64, string)) (*core.SecurityState, error) {
+	if err := ValidateProfile(s.Profile); err != nil {
+		return nil, err
+	}
 	state := &core.SecurityState{Timestamp: time.Now()}
 
 	const totalSteps = 16.0
@@ -218,15 +222,15 @@ func (s *MacOSScanner) Scan(progress func(float64, string)) (*core.SecurityState
 		}
 	}
 	addFinding(core.Finding{
-		Category:    "Identity & Access",
-		Name:        "Sudoers NOPASSWD Audit",
-		Description: "Checks if any accounts can elevate privileges without a password.",
-		Severity:    core.High,
-		CurrentVal:  sudoVal,
-		ExpectedVal: "No NOPASSWD found",
+		Category:     "Identity & Access",
+		Name:         "Sudoers NOPASSWD Audit",
+		Description:  "Checks if any accounts can elevate privileges without a password.",
+		Severity:     core.High,
+		CurrentVal:   sudoVal,
+		ExpectedVal:  "No NOPASSWD found",
 		CISBenchmark: "5.3.6",
-		LogContext:  sudoVal,
-		Passed:      sudoPassed,
+		LogContext:   sudoVal,
+		Passed:       sudoPassed,
 	})
 
 	// 8. Core dumps disabled — CIS 1.5.1
@@ -357,15 +361,15 @@ func (s *MacOSScanner) Scan(progress func(float64, string)) (*core.SecurityState
 		ipv6Val = "disabled"
 	}
 	addFinding(core.Finding{
-		Category:    "Network Security",
-		Name:        "IPv6 Disable Status",
-		Description: "Logs whether IPv6 is disabled. Disable if not in use to reduce attack surface.",
-		Severity:    core.LogOnly,
-		CurrentVal:  ipv6Val,
-		ExpectedVal: "disabled if not required",
+		Category:     "Network Security",
+		Name:         "IPv6 Disable Status",
+		Description:  "Logs whether IPv6 is disabled. Disable if not in use to reduce attack surface.",
+		Severity:     core.LogOnly,
+		CurrentVal:   ipv6Val,
+		ExpectedVal:  "disabled if not required",
 		CISBenchmark: "3.1.1",
-		LogContext:  ipv6Val,
-		Passed:      true,
+		LogContext:   ipv6Val,
+		Passed:       true,
 	})
 
 	// 13. Time synchronization — CIS 2.1.1
@@ -401,15 +405,15 @@ func (s *MacOSScanner) Scan(progress func(float64, string)) (*core.SecurityState
 	// 14. Listening TCP ports — log only
 	listenPorts := collectListenPorts()
 	addFinding(core.Finding{
-		Category:    "Advanced Network Defense",
-		Name:        "Listening TCP Ports",
-		Description: "Lists all locally listening TCP ports to find rogue services.",
-		Severity:    core.LogOnly,
-		CurrentVal:  fmt.Sprintf("%d listening ports", len(listenPorts)),
-		ExpectedVal: "N/A",
+		Category:     "Advanced Network Defense",
+		Name:         "Listening TCP Ports",
+		Description:  "Lists all locally listening TCP ports to find rogue services.",
+		Severity:     core.LogOnly,
+		CurrentVal:   fmt.Sprintf("%d listening ports", len(listenPorts)),
+		ExpectedVal:  "N/A",
 		CISBenchmark: "N/A",
-		LogContext:  strings.Join(listenPorts, ", "),
-		Passed:      true,
+		LogContext:   strings.Join(listenPorts, ", "),
+		Passed:       true,
 	})
 
 	// 15. DNS configuration — log only
@@ -426,20 +430,22 @@ func (s *MacOSScanner) Scan(progress func(float64, string)) (*core.SecurityState
 		}
 	}
 	addFinding(core.Finding{
-		Category:    "Advanced Network Defense",
-		Name:        "Configured Nameservers",
-		Description: "Audits DNS configuration for rogue or unauthorized forwarders.",
-		Severity:    core.LogOnly,
-		CurrentVal:  dnsVal,
-		ExpectedVal: "known healthy DNS",
+		Category:     "Advanced Network Defense",
+		Name:         "Configured Nameservers",
+		Description:  "Audits DNS configuration for rogue or unauthorized forwarders.",
+		Severity:     core.LogOnly,
+		CurrentVal:   dnsVal,
+		ExpectedVal:  "known healthy DNS",
 		CISBenchmark: "N/A",
-		LogContext:  dnsVal,
-		Passed:      true,
+		LogContext:   dnsVal,
+		Passed:       true,
 	})
 
 	// 16. Delegate to cross-platform deep scanners
 	ScanSecrets(addFinding)
 	ScanVulnerabilities(addFinding)
+	ScanAgentSurface(addFinding)
+	ScanArtifacts(addFinding)
 
 	return state, nil
 }

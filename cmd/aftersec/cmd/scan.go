@@ -21,7 +21,7 @@ var scanCmd = &cobra.Command{
 	Short: "Scan the current macOS security posture",
 	Run: func(cmd *cobra.Command, args []string) {
 		runScan()
-		
+
 		if watchMode {
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
@@ -34,18 +34,26 @@ var scanCmd = &cobra.Command{
 }
 
 func runScan() {
+	if err := scanners.ValidateProfile(scanProfile); err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
+	if !scanners.KnownCategory(scanCategory) {
+		fmt.Printf("unknown scan category %q\n", scanCategory)
+		os.Exit(2)
+	}
 	scanner := scanners.NewMacOSScanner(globalMgr)
+	scanner.Profile = scanProfile
 	state, err := scanner.Scan(nil)
 	if err != nil {
 		fmt.Println("Error scanning:", err)
 		os.Exit(1)
 	}
 
-	// Filter by category if requested
 	if scanCategory != "all" && scanCategory != "" {
 		var filtered []core.Finding
 		for _, f := range state.Findings {
-			if f.Category == scanCategory {
+			if scanners.MatchCategory(scanCategory, f.Category) {
 				filtered = append(filtered, f)
 			}
 		}
@@ -56,7 +64,7 @@ func runScan() {
 
 	// Implement standard exit codes for scripting support
 	for _, f := range state.Findings {
-		if !f.Passed && f.Severity == "critical" {
+		if !f.Passed && (f.Severity == core.Critical || f.Severity == core.VeryHigh) {
 			os.Exit(10)
 		}
 	}

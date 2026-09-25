@@ -8,6 +8,7 @@ package edr
 // Auth interception (FAN_CLASS_CONTENT) requires CAP_SYS_ADMIN; falls back to notify-only.
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -46,6 +47,12 @@ type ESConsumer struct {
 func NotifyWriteEventCode() uint32  { return 0 }
 func AuthWriteEventCode() uint32    { return 0 }
 func NotifyRenameEventCode() uint32 { return 0 }
+func AuthExecEventCode() uint32     { return 0 }
+func NotifyExecEventCode() uint32   { return 0 }
+func NotifyExitEventCode() uint32   { return 0 }
+func NotifyMountEventCode() uint32  { return 0 }
+func NotifyUnlinkEventCode() uint32 { return 0 }
+func NotifyTCCEventCode() uint32    { return 0 }
 
 // NewESConsumer creates a fanotify-backed sensor.
 // Tries FAN_CLASS_CONTENT (blocking, requires CAP_SYS_ADMIN) first; falls back to
@@ -73,7 +80,7 @@ func NewESConsumer(eventChannel chan<- ProcessEvent) (*ESConsumer, error) {
 // The events []uint32 parameter is ignored — darwin ES event type constants have no
 // direct fanotify equivalent; we arm all relevant events unconditionally.
 func (c *ESConsumer) Subscribe(_ []uint32) error {
-	mask := uint64(unix.FAN_OPEN_EXEC | unix.FAN_OPEN | unix.FAN_CLOSE_WRITE | unix.FAN_CLOSE_NOWRITE)
+	mask := uint64(unix.FAN_OPEN_EXEC | unix.FAN_OPEN | unix.FAN_CLOSE_WRITE | unix.FAN_CLOSE_NOWRITE | unix.FAN_DELETE)
 	if c.authMode {
 		mask |= unix.FAN_OPEN_EXEC_PERM
 	}
@@ -171,6 +178,9 @@ func (c *ESConsumer) dispatchFanotifyEvent(meta *unix.FanotifyEventMetadata) {
 	var msgPtr unsafe.Pointer
 
 	switch {
+	case meta.Mask&unix.FAN_DELETE != 0:
+		evType = EventNotifyUnlink
+		defer unix.Close(fd)
 	case meta.Mask&unix.FAN_OPEN_EXEC_PERM != 0:
 		evType = EventAuthExec
 		// Ownership of fd transfers to fanotifyAuthMsg; RespondAuth closes it.
@@ -194,16 +204,24 @@ func (c *ESConsumer) dispatchFanotifyEvent(meta *unix.FanotifyEventMetadata) {
 	}
 	_ = fd // suppress unused-after-reassign warning for auth path
 
+	var args []string
+	var truncated bool
+	if evType == EventAuthExec || evType == EventNotifyExec {
+		args, truncated = procCmdline(pid)
+	}
+
 	select {
 	case c.events <- ProcessEvent{
-		Type:      evType,
-		Timestamp: time.Now(),
-		PID:       pid,
-		PPID:      ppid,
-		ExecPath:  execPath,
-		ActorPath: actorPath,
-		UID:       uid,
-		Msg:       msgPtr,
+		Type:          evType,
+		Timestamp:     time.Now(),
+		PID:           pid,
+		PPID:          ppid,
+		ExecPath:      execPath,
+		ActorPath:     actorPath,
+		Args:          args,
+		ArgsTruncated: truncated,
+		UID:           uid,
+		Msg:           msgPtr,
 	}:
 	default:
 		// Channel full: drop notify events; for auth events we must still respond
@@ -223,6 +241,33 @@ func (c *ESConsumer) dispatchFanotifyEvent(meta *unix.FanotifyEventMetadata) {
 			unix.Close(msg.eventFd)
 		}
 	}
+}
+
+func procCmdline(pid int) ([]string, bool) {
+	if pid <= 0 {
+		return nil, true
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return nil, true
+	}
+	truncated := false
+	if len(data) > 1<<15 {
+		data = data[:1<<15]
+		truncated = true
+	}
+	parts := bytes.Split(data, []byte{0})
+	args := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len(part) == 0 {
+			continue
+		}
+		if len(args) >= 64 || len(part) > 4096 {
+			return args, true
+		}
+		args = append(args, string(part))
+	}
+	return args, truncated
 }
 
 func fdReadlinkPath(path string) string {
