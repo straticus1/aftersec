@@ -135,6 +135,17 @@ func (rt *Router) handleEndpointAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Validated authorization claims are required", http.StatusUnauthorized)
 		return
 	}
+	if rt.repos != nil && rt.repos.Endpoints != nil {
+		endpoint, err := rt.repos.Endpoints.GetByID(r.Context(), req.EndpointID)
+		if err != nil {
+			http.Error(w, "Remote action is not authorized", http.StatusForbidden)
+			return
+		}
+		if endpoint != nil && endpoint.EnrollmentStatus == repository.InventoryStatus {
+			http.Error(w, "inventory endpoints do not accept remote actions", http.StatusForbidden)
+			return
+		}
+	}
 	if rt.actionMinter == nil || rt.enterpriseSrv == nil {
 		http.Error(w, "Remote response is not configured", http.StatusServiceUnavailable)
 		return

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +41,17 @@ func TestVerifyRejectsTamperedManifest(t *testing.T) {
 	}
 	if _, err = Sign(private, Manifest{Version: "1", Artifacts: []Artifact{{Name: "curl", OS: "darwin", Arch: "arm64", SHA256: agent.SHA256, Size: 1}}}); err == nil {
 		t.Fatal("unexpected artifact name signed")
+	}
+	windows := Artifact{Name: "aftersec-windows", OS: "windows", Arch: "amd64", SHA256: agent.SHA256, Size: agent.Size}
+	if _, err = Sign(private, Manifest{Version: "1", Artifacts: []Artifact{windows, {Name: "management-ca", OS: "windows", Arch: "amd64", SHA256: agent.SHA256, Size: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	windows.Arch = "arm64"
+	if _, err = Sign(private, Manifest{Version: "1", Artifacts: []Artifact{windows}}); err == nil {
+		t.Fatal("windows arm64 signed")
+	}
+	if _, err = Sign(private, Manifest{Version: "1", Artifacts: []Artifact{{Name: "aftersec", OS: "windows", Arch: "amd64", SHA256: agent.SHA256, Size: 1}}}); err == nil {
+		t.Fatal("unix agent signed for windows")
 	}
 }
 
@@ -109,5 +121,69 @@ func TestPythonBootstrapInstallsOnlyASignedRelease(t *testing.T) {
 	cmd.Env = append(os.Environ(), "HOME="+filepath.Join(root, "home2"))
 	if err = cmd.Run(); err == nil {
 		t.Fatal("tampered artifact installed")
+	}
+}
+
+func TestPythonBootstrapInstallsWindowsReporterWithoutEnrollment(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemKey, err := PublicPEM(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	reporter := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/argv.txt\"\n")
+	ca := []byte("management-ca\n")
+	artifactDir := filepath.Join(root, "artifacts")
+	if err = os.Mkdir(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var artifacts []Artifact
+	for name, body := range map[string][]byte{"aftersec-windows": reporter, "management-ca": ca} {
+		sum := sha256.Sum256(body)
+		digest := hex.EncodeToString(sum[:])
+		if err = os.WriteFile(filepath.Join(artifactDir, digest), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		artifacts = append(artifacts, Artifact{Name: name, OS: "windows", Arch: "amd64", SHA256: digest, Size: int64(len(body))})
+	}
+	signed, err := Sign(private, Manifest{Version: "1", Artifacts: artifacts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "manifest.json")
+	if err = os.WriteFile(manifestPath, signed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(root, "key.pem")
+	if err = os.WriteFile(keyPath, []byte(pemKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(root, "home")
+	script := filepath.Join("..", "..", "deploy", "bootstrap.py")
+	cmd := exec.Command("python3", script, "--manifest", manifestPath, "--artifact-dir", artifactDir, "--public-key", keyPath, "--tenant", "11111111-1111-1111-1111-111111111111", "--server", "https://mgmt.example:8080", "--code", "one-time-code", "--os", "windows", "--arch", "amd64")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, output)
+	}
+	if _, err = os.Stat(filepath.Join(home, ".aftersec", "config.yaml")); err == nil {
+		t.Fatal("windows reporter wrote an agent config")
+	}
+	argv, err := os.ReadFile(filepath.Join(home, "argv.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(argv)
+	if !strings.Contains(text, "report") || !strings.Contains(text, "one-time-code") || strings.Contains(text, "enroll") {
+		t.Fatal(text)
+	}
+	installed, err := os.ReadFile(filepath.Join(home, ".aftersec", "bin", "aftersec-windows.exe"))
+	if err != nil || string(installed) != string(reporter) {
+		t.Fatalf("installed reporter: %v", err)
 	}
 }

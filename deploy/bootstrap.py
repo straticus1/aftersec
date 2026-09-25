@@ -26,8 +26,8 @@ P = 2**255 - 19
 L = 2**252 + 27742317777372353535851937790883648493
 D = (-121665 * pow(121666, P - 2, P)) % P
 I = pow(2, (P - 1) // 4, P)
-ALLOWED = {"aftersec", "aftersecd", "aftersec-display", "management-ca"}
-EXECUTABLES = {"aftersec", "aftersecd", "aftersec-display"}
+ALLOWED = {"aftersec", "aftersecd", "aftersec-display", "aftersec-windows", "management-ca"}
+EXECUTABLES = {"aftersec", "aftersecd", "aftersec-display", "aftersec-windows"}
 MAX_MANIFEST = 64 * 1024
 MAX_ARTIFACT = 64 * 1024 * 1024
 
@@ -208,7 +208,10 @@ def _select(manifest, system, arch):
         if not isinstance(size, int) or isinstance(size, bool) or size < 1 or size > MAX_ARTIFACT:
             raise SystemExit("bootstrap artifact size is invalid")
         found[name] = item
-    if "aftersec" not in found or "management-ca" not in found:
+    if system == "windows":
+        if arch != "amd64" or "aftersec-windows" not in found or "management-ca" not in found:
+            raise SystemExit("bootstrap manifest is missing the Windows reporter or management CA")
+    elif "aftersec" not in found or "management-ca" not in found:
         raise SystemExit("bootstrap manifest is missing the agent or management CA")
     return found
 
@@ -294,29 +297,47 @@ def install(args):
     else:
         raw = _fetch(_https_url(args.server, "/api/v1/bootstrap/manifest"))
     manifest = _load_manifest(raw, public)
-    system = args.os or ("darwin" if sys.platform == "darwin" else "linux" if sys.platform.startswith("linux") else "")
-    machine = args.arch or {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}.get(platform.machine(), "")
-    if system not in {"darwin", "linux"} or machine not in {"arm64", "amd64"}:
+    system = args.os or ("darwin" if sys.platform == "darwin" else "linux" if sys.platform.startswith("linux") else "windows" if sys.platform == "win32" else "")
+    machine = args.arch or {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64", "AMD64": "amd64"}.get(platform.machine(), "")
+    if system not in {"darwin", "linux", "windows"} or machine not in {"arm64", "amd64"}:
+        raise SystemExit("bootstrap platform is unsupported")
+    if system == "windows" and machine != "amd64":
         raise SystemExit("bootstrap platform is unsupported")
     chosen = _select(manifest, system, machine)
     home = os.path.expanduser("~")
-    binary_dir = args.dest or ("/usr/local/bin" if os.geteuid() == 0 else os.path.join(home, ".aftersec", "bin"))
+    if system == "windows":
+        binary_dir = args.dest or os.path.join(home, ".aftersec", "bin")
+    else:
+        binary_dir = args.dest or ("/usr/local/bin" if os.geteuid() == 0 else os.path.join(home, ".aftersec", "bin"))
     ca_path = os.path.join(home, ".aftersec", "management-ca.pem")
     for name, item in chosen.items():
         data = _artifact_bytes(item, args.server, args.artifact_dir)
+        installed = "aftersec-windows.exe" if system == "windows" and name == "aftersec-windows" else name
         if name == "management-ca":
             _write_file(os.path.dirname(ca_path), os.path.basename(ca_path), data, 0o644)
         else:
-            _write_file(binary_dir, name, data, 0o755)
-    if args.tenant and args.grpc:
-        _write_config(home, _safe_label(args.tenant, "tenant"), _safe_label(args.grpc, "grpc address"), ca_path)
-    if args.code:
-        if not args.tenant or not args.grpc:
-            raise SystemExit("tenant and grpc address are required to enroll")
-        binary = os.path.join(binary_dir, "aftersec")
-        completed = subprocess.run([binary, "--config", os.path.join(home, ".aftersec", "config.yaml"), "enroll", args.code], check=False)
-        if completed.returncode != 0:
-            raise SystemExit(completed.returncode)
+            _write_file(binary_dir, installed, data, 0o755)
+    if system == "windows":
+        if args.code:
+            if not args.tenant or not args.server:
+                raise SystemExit("tenant and https server are required to report")
+            binary = os.path.join(binary_dir, "aftersec-windows.exe")
+            completed = subprocess.run(
+                [binary, "report", "--server", args.server, "--tenant", _safe_label(args.tenant, "tenant"), "--ca", ca_path, "--code", args.code],
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise SystemExit(completed.returncode)
+    else:
+        if args.tenant and args.grpc:
+            _write_config(home, _safe_label(args.tenant, "tenant"), _safe_label(args.grpc, "grpc address"), ca_path)
+        if args.code:
+            if not args.tenant or not args.grpc:
+                raise SystemExit("tenant and grpc address are required to enroll")
+            binary = os.path.join(binary_dir, "aftersec")
+            completed = subprocess.run([binary, "--config", os.path.join(home, ".aftersec", "config.yaml"), "enroll", args.code], check=False)
+            if completed.returncode != 0:
+                raise SystemExit(completed.returncode)
     print("bootstrap installed")
 
 

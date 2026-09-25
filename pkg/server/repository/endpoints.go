@@ -3,14 +3,41 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
+	"time"
 )
 
+const InventoryStatus = "inventory"
+
+const endpointColumns = `id, organization_id, hostname, platform, enrollment_status, COALESCE(platform_version, ''), last_seen_at, metadata`
+
+// ErrInventoryCode means the organization-scoped code is missing, expired, or already used.
+var ErrInventoryCode = errors.New("inventory code is invalid")
+
 type Endpoint struct {
-	ID               string
-	OrganizationID   string
-	Hostname         string
-	Platform         string
-	EnrollmentStatus string
+	ID               string          `json:"id"`
+	OrganizationID   string          `json:"organization_id"`
+	Hostname         string          `json:"hostname"`
+	Platform         string          `json:"platform"`
+	EnrollmentStatus string          `json:"enrollment_status"`
+	PlatformVersion  string          `json:"platform_version,omitempty"`
+	LastSeenAt       *time.Time      `json:"last_seen_at,omitempty"`
+	Posture          json.RawMessage `json:"posture,omitempty"`
+}
+
+// InventoryInput is one Windows reporter observation.
+//
+// Threats: the code is stored only as a digest and consumed once. The row is
+// inventory, with no hardware id, refresh token, or client certificate. The
+// posture bytes are the caller's already-bounded JSON.
+type InventoryInput struct {
+	OrganizationID string
+	CodeDigest     [32]byte
+	Hostname       string
+	OSVersion      string
+	ObservedAt     time.Time
+	Posture        []byte
 }
 
 type EndpointRepository struct {
@@ -32,15 +59,15 @@ func (r *EndpointRepository) Register(ctx context.Context, ep *Endpoint) error {
 
 // GetByHostname returns a persisted endpoint by hostname signature
 func (r *EndpointRepository) GetByHostname(ctx context.Context, hostname string) (*Endpoint, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT id, organization_id, hostname, platform, enrollment_status FROM endpoints WHERE hostname = $1 LIMIT 1", hostname)
-	var ep Endpoint
-	err := row.Scan(&ep.ID, &ep.OrganizationID, &ep.Hostname, &ep.Platform, &ep.EnrollmentStatus)
+	row := r.db.QueryRowContext(ctx, "SELECT "+endpointColumns+" FROM endpoints WHERE hostname = $1 LIMIT 1", hostname)
+	ep, err := scanEndpoint(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
-	} else if err != nil {
+	}
+	if err != nil {
 		return nil, err
 	}
-	return &ep, nil
+	return ep, nil
 }
 
 // List returns all endpoints with optional organization filter
@@ -49,10 +76,10 @@ func (r *EndpointRepository) List(ctx context.Context, orgID string) ([]*Endpoin
 	var args []interface{}
 
 	if orgID != "" {
-		query = "SELECT id, organization_id, hostname, platform, enrollment_status FROM endpoints WHERE organization_id = $1 ORDER BY created_at DESC"
+		query = "SELECT " + endpointColumns + " FROM endpoints WHERE organization_id = $1 ORDER BY created_at DESC"
 		args = append(args, orgID)
 	} else {
-		query = "SELECT id, organization_id, hostname, platform, enrollment_status FROM endpoints ORDER BY created_at DESC"
+		query = "SELECT " + endpointColumns + " FROM endpoints ORDER BY created_at DESC"
 	}
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -63,24 +90,84 @@ func (r *EndpointRepository) List(ctx context.Context, orgID string) ([]*Endpoin
 
 	var endpoints []*Endpoint
 	for rows.Next() {
-		var ep Endpoint
-		if err := rows.Scan(&ep.ID, &ep.OrganizationID, &ep.Hostname, &ep.Platform, &ep.EnrollmentStatus); err != nil {
+		ep, err := scanEndpoint(rows)
+		if err != nil {
 			return nil, err
 		}
-		endpoints = append(endpoints, &ep)
+		endpoints = append(endpoints, ep)
 	}
 	return endpoints, rows.Err()
 }
 
 // GetByID returns an endpoint by ID
 func (r *EndpointRepository) GetByID(ctx context.Context, id string) (*Endpoint, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT id, organization_id, hostname, platform, enrollment_status FROM endpoints WHERE id = $1", id)
-	var ep Endpoint
-	err := row.Scan(&ep.ID, &ep.OrganizationID, &ep.Hostname, &ep.Platform, &ep.EnrollmentStatus)
+	row := r.db.QueryRowContext(ctx, "SELECT "+endpointColumns+" FROM endpoints WHERE id = $1", id)
+	ep, err := scanEndpoint(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
-	} else if err != nil {
+	}
+	if err != nil {
 		return nil, err
+	}
+	return ep, nil
+}
+
+// RegisterInventory consumes one enrollment code and records a Windows reporter.
+// A failed insert rolls the code consumption back. This does not issue agent credentials.
+func (r *EndpointRepository) RegisterInventory(ctx context.Context, in InventoryInput) (string, error) {
+	if r == nil || r.db == nil {
+		return "", errors.New("inventory store is unavailable")
+	}
+	if in.OrganizationID == "" || in.Hostname == "" || in.OSVersion == "" || len(in.Posture) == 0 || in.ObservedAt.IsZero() {
+		return "", errors.New("inventory report is incomplete")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var codeID string
+	err = tx.QueryRowContext(ctx, `UPDATE enrollment_codes
+		SET used_at = $3
+		WHERE organization_id = $1 AND code_hash = $2 AND used_at IS NULL AND expires_at > $3
+		RETURNING id`, in.OrganizationID, in.CodeDigest[:], in.ObservedAt).Scan(&codeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrInventoryCode
+	}
+	if err != nil {
+		return "", err
+	}
+	var id string
+	err = tx.QueryRowContext(ctx, `INSERT INTO endpoints
+		(organization_id, hostname, platform, platform_version, enrollment_status, last_seen_at, metadata)
+		VALUES ($1, $2, 'windows', $3, 'inventory', $4, $5::jsonb)
+		RETURNING id`, in.OrganizationID, in.Hostname, in.OSVersion, in.ObservedAt, string(in.Posture)).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+type endpointScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanEndpoint(sc endpointScanner) (*Endpoint, error) {
+	var ep Endpoint
+	var seen sql.NullTime
+	var meta []byte
+	if err := sc.Scan(&ep.ID, &ep.OrganizationID, &ep.Hostname, &ep.Platform, &ep.EnrollmentStatus, &ep.PlatformVersion, &seen, &meta); err != nil {
+		return nil, err
+	}
+	if seen.Valid {
+		observed := seen.Time
+		ep.LastSeenAt = &observed
+	}
+	if ep.EnrollmentStatus == InventoryStatus && len(meta) > 0 && string(meta) != "{}" && string(meta) != "null" {
+		ep.Posture = append(json.RawMessage(nil), meta...)
 	}
 	return &ep, nil
 }

@@ -148,6 +148,7 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 	mux.HandleFunc("/api/v1/bootstrap/manifest", router.handleBootstrap("manifest"))
 	mux.HandleFunc("/api/v1/bootstrap/install.py", router.handleBootstrap("script"))
 	mux.HandleFunc("/api/v1/bootstrap/artifacts/", router.handleBootstrap("artifact"))
+	mux.HandleFunc("/api/v1/inventory/windows", router.handleInventoryWindows)
 
 	// Organizations API
 	mux.HandleFunc("/api/v1/organizations", jwtManager.HTTPMiddleware(router.handleOrganizations))

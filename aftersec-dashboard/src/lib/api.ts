@@ -8,12 +8,39 @@ type Endpoint = {
   threatScore: string;
 };
 
-// Currently mocking response since backend uses stubs
+type ServerEndpoint = {
+  id?: string;
+  hostname?: string;
+  platform?: string;
+  platform_version?: string;
+  enrollment_status?: string;
+  posture?: { checks?: { passed?: boolean }[] };
+};
+
+function mapServerEndpoint(row: ServerEndpoint): Endpoint | null {
+  if (!row.id || !row.hostname || !row.platform || !row.enrollment_status) {
+    return null;
+  }
+  const failed = Array.isArray(row.posture?.checks) && row.posture.checks.some((check) => check.passed === false);
+  return {
+    id: row.id,
+    hostname: row.hostname,
+    platform: row.platform_version ? `${row.platform} ${row.platform_version}` : row.platform,
+    status: row.enrollment_status,
+    threatScore: row.enrollment_status === 'inventory' ? (failed ? 'Check failed' : 'Reported') : 'Safe',
+  };
+}
+
+// Sample rows stay visible only when the server has no endpoints yet.
 export async function getEndpoints(): Promise<Endpoint[]> {
   try {
     const res = await fetch(`${API_URL}/endpoints`, { cache: 'no-store' });
     if (!res.ok) throw new Error('API error');
-    // For now we map an empty array to some dummy data to showcase UI since backend is stubbed
+    const body: unknown = await res.json();
+    if (Array.isArray(body)) {
+      const mapped = body.map((row) => mapServerEndpoint(row as ServerEndpoint)).filter((row): row is Endpoint => row !== null);
+      if (mapped.length > 0) return mapped;
+    }
     return [
       { id: 'HW-MACBOOK-PRO-9X', hostname: 'ryan-mbp', platform: 'macOS 14.2', status: 'Online', threatScore: 'Safe' },
       { id: 'HW-UBUNTU-SERV-01', hostname: 'prod-backend-1', platform: 'Linux 6.5', status: 'Online', threatScore: 'Safe' },

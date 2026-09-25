@@ -164,6 +164,10 @@ func runPowerShell(ctx context.Context, script string) ([]byte, error) {
 }
 
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "report" {
+		runReport(os.Args[2:])
+		return
+	}
 	if runtime.GOOS != "windows" {
 		fmt.Fprintln(os.Stderr, "This scanner requires Windows.")
 		os.Exit(2)

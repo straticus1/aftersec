@@ -208,7 +208,7 @@ go mod download
 
 ### Endpoint bootstrap
 
-A new macOS or Linux machine receives one file: `deploy/bootstrap.py`, served by the management server. The script checks a signed release before it writes anything. It accepts only `https://`. The manifest names files, operating systems, architectures, sizes, and SHA-256 digests. It does not carry a URL or a command.
+A new machine receives one file: `deploy/bootstrap.py`, served by the management server. The script checks a signed release before it writes anything. It accepts only `https://`. The manifest names files, operating systems, architectures, sizes, and SHA-256 digests. It does not carry a URL or a command.
 
 The publisher stays off until all three of these are set on `aftersec-server`. If any one is set and another is missing or does not verify, the server exits. The signing private key stays offline. The server holds the public key and a manifest already signed by `bootstrap.Sign`.
 
@@ -220,7 +220,7 @@ AFTERSEC_BOOTSTRAP_DIR=/secure/bootstrap-artifacts
 AFTERSEC_BOOTSTRAP_SCRIPT=/opt/aftersec/deploy/bootstrap.py
 ```
 
-Each file in the artifact directory is a regular file whose name is the lowercase SHA-256 of its bytes. A platform entry must include `aftersec` and `management-ca`. `aftersecd` and `aftersec-display` are included when that release ships them. Operating systems are `darwin` and `linux`. Architectures are `arm64` and `amd64`.
+Each file in the artifact directory is a regular file whose name is the lowercase SHA-256 of its bytes. A macOS or Linux entry must include `aftersec` and `management-ca`. `aftersecd` and `aftersec-display` are included when that release ships them. A Windows entry must include `aftersec-windows` and `management-ca`, and only `amd64`. Operating systems are `darwin`, `linux`, and `windows`. macOS and Linux architectures are `arm64` and `amd64`.
 
 Save the script and compare its SHA-256 with the `X-Aftersec-Bootstrap-SHA256` response header before running it. A replaced script can replace the public key embedded in it. These three routes do not use a JWT and answer 503 until the publisher is configured:
 
@@ -240,7 +240,16 @@ python3 install.py \
   --code ONE-TIME-CODE
 ```
 
-Root installs the binaries in `/usr/local/bin`. Any other user gets `~/.aftersec/bin`. The management CA is `~/.aftersec/management-ca.pem`. When `--tenant` and `--grpc` are both set, the script writes `~/.aftersec/config.yaml` as mode `0600` in enterprise mode, with local storage and that CA. The enrollment code is an argument only. It is not written into the config. `aftersec enroll <code>` still requires a hardware attestation quote and fails closed without one. `--code` runs that enroll command after the files are in place.
+Root installs the macOS and Linux binaries in `/usr/local/bin`. Any other user gets `~/.aftersec/bin`. The management CA is `~/.aftersec/management-ca.pem`. When `--tenant` and `--grpc` are both set, the script writes `~/.aftersec/config.yaml` as mode `0600` in enterprise mode, with local storage and that CA. The enrollment code is an argument only. It is not written into the config. `aftersec enroll <code>` still requires a hardware attestation quote and fails closed without one. `--code` runs that enroll command after the files are in place.
+
+Windows installs `aftersec-windows.exe` under `~/.aftersec/bin` and does not write an agent config. `--code` runs `aftersec-windows.exe report`, which posts hostname, OS version, last boot, Defender real-time protection, and the three firewall profiles to `POST /api/v1/inventory/windows`. The server stores that machine with enrollment status `inventory`. It does not issue a certificate or a refresh token, and remote actions against that row are refused. `GET /api/v1/endpoints` lists the row with the other endpoints.
+
+```bash
+python3 install.py \
+  --server https://mgmt.example:8080 \
+  --tenant 11111111-1111-1111-1111-111111111111 \
+  --code ONE-TIME-CODE
+```
 
 The same script can install from a local signed manifest: `--manifest`, `--artifact-dir`, and `--public-key`. `python3 deploy/bootstrap.py --self-test` checks the signature verifier.
 

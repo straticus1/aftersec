@@ -16,6 +16,8 @@
 
 Build with `./build.sh windows`, then run `bin/aftersec-windows.exe scan` on Windows. The standalone scanner checks Defender antivirus/real-time protection and all firewall profiles using Windows PowerShell. It emits JSON. Exit 0 means both checks passed, 1 means a failed or unavailable check, and 2 means a usage/platform error. Each command has a 15-second timeout and bounded output. It does not change system configuration.
 
+`aftersec-windows report` posts that JSON, plus hostname, OS version, and last boot, to `POST /api/v1/inventory/windows` over TLS. The server records enrollment status `inventory` and does not issue a certificate, refresh token, or hardware quote. Remote actions against that row are refused. The signed bootstrap can deliver `aftersec-windows` for `windows`/`amd64` only.
+
 This is a separate minimal scanner. The full CLI, daemon, Unix sensors, GUI and enforcement stack are not Windows ports. Native Windows CI was added for scanner tests and compilation; local cross-compilation does not establish runtime behavior on Windows.
 
 ## Enterprise configuration migration

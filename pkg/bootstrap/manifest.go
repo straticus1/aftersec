@@ -18,7 +18,7 @@ import (
 const MaxManifest = 64 * 1024
 
 var allowedNames = map[string]struct{}{
-	"aftersec": {}, "aftersecd": {}, "aftersec-display": {}, "management-ca": {},
+	"aftersec": {}, "aftersecd": {}, "aftersec-display": {}, "aftersec-windows": {}, "management-ca": {},
 }
 
 // Artifact is one file the bootstrap may install.
@@ -114,10 +114,16 @@ func validate(manifest Manifest) error {
 		if _, ok := allowedNames[artifact.Name]; !ok {
 			return fmt.Errorf("bootstrap artifact name rejected")
 		}
-		if artifact.OS != "darwin" && artifact.OS != "linux" {
-			return fmt.Errorf("bootstrap artifact platform rejected")
-		}
-		if artifact.Arch != "amd64" && artifact.Arch != "arm64" {
+		switch artifact.OS {
+		case "darwin", "linux":
+			if artifact.Arch != "amd64" && artifact.Arch != "arm64" {
+				return fmt.Errorf("bootstrap artifact platform rejected")
+			}
+		case "windows":
+			if artifact.Arch != "amd64" || (artifact.Name != "aftersec-windows" && artifact.Name != "management-ca") {
+				return fmt.Errorf("bootstrap artifact platform rejected")
+			}
+		default:
 			return fmt.Errorf("bootstrap artifact platform rejected")
 		}
 		if len(artifact.SHA256) != sha256.Size*2 || artifact.Size < 1 || artifact.Size > 64<<20 || !lowerHex(artifact.SHA256) {
