@@ -168,7 +168,7 @@ docker-compose up -d
 
 # Enable mTLS for production
 export MTLS_ENABLED=true
-docker-compose -f docker-compose.prod.yml up -d
+docker-compose -f docker-compose.production.yml up -d
 
 # Access dashboard
 open http://localhost:3000
@@ -184,6 +184,7 @@ open http://localhost:3000
 - **Go**: 1.22+ (for building from source)
 - **Docker**: 20.10+ (for enterprise deployment)
 - **Node.js**: 18+ (for dashboard development)
+- **Python**: 3.9+ on a machine that installs from the endpoint bootstrap
 - **Xcode Command Line Tools**: `xcode-select --install`
 
 ### Build from Source
@@ -205,20 +206,43 @@ go mod download
 ./build.sh server
 ```
 
-### Binary Installation
+### Endpoint bootstrap
 
-Download pre-built binaries from [Releases](https://github.com/straticus1/aftersec/releases):
+A new macOS or Linux machine receives one file: `deploy/bootstrap.py`, served by the management server. The script checks a signed release before it writes anything. It accepts only `https://`. The manifest names files, operating systems, architectures, sizes, and SHA-256 digests. It does not carry a URL or a command.
+
+The publisher stays off until all three of these are set on `aftersec-server`. If any one is set and another is missing or does not verify, the server exits. The signing private key stays offline. The server holds the public key and a manifest already signed by `bootstrap.Sign`.
 
 ```bash
-# Extract release
-tar -xzf aftersec-v1.0.0-darwin-arm64.tar.gz
-
-# Install to /usr/local/bin
-sudo cp bin/* /usr/local/bin/
-
-# Verify installation
-aftersec version
+AFTERSEC_BOOTSTRAP_PUBLIC_KEY=/secure/bootstrap-public.pem
+AFTERSEC_BOOTSTRAP_MANIFEST=/secure/bootstrap-manifest.json
+AFTERSEC_BOOTSTRAP_DIR=/secure/bootstrap-artifacts
+# optional; default is deploy/bootstrap.py, relative to the server process
+AFTERSEC_BOOTSTRAP_SCRIPT=/opt/aftersec/deploy/bootstrap.py
 ```
+
+Each file in the artifact directory is a regular file whose name is the lowercase SHA-256 of its bytes. A platform entry must include `aftersec` and `management-ca`. `aftersecd` and `aftersec-display` are included when that release ships them. Operating systems are `darwin` and `linux`. Architectures are `arm64` and `amd64`.
+
+Save the script and compare its SHA-256 with the `X-Aftersec-Bootstrap-SHA256` response header before running it. A replaced script can replace the public key embedded in it. These three routes do not use a JWT and answer 503 until the publisher is configured:
+
+```text
+GET /api/v1/bootstrap/install.py
+GET /api/v1/bootstrap/manifest
+GET /api/v1/bootstrap/artifacts/<sha256>
+```
+
+```bash
+curl -fsSL -D headers.txt https://mgmt.example:8080/api/v1/bootstrap/install.py -o install.py
+# SHA-256 of install.py must match X-Aftersec-Bootstrap-SHA256
+python3 install.py \
+  --server https://mgmt.example:8080 \
+  --tenant org-1 \
+  --grpc mgmt.example:9090 \
+  --code ONE-TIME-CODE
+```
+
+Root installs the binaries in `/usr/local/bin`. Any other user gets `~/.aftersec/bin`. The management CA is `~/.aftersec/management-ca.pem`. When `--tenant` and `--grpc` are both set, the script writes `~/.aftersec/config.yaml` as mode `0600` in enterprise mode, with local storage and that CA. The enrollment code is an argument only. It is not written into the config. `aftersec enroll <code>` still requires a hardware attestation quote and fails closed without one. `--code` runs that enroll command after the files are in place.
+
+The same script can install from a local signed manifest: `--manifest`, `--artifact-dir`, and `--public-key`. `python3 deploy/bootstrap.py --self-test` checks the signature verifier.
 
 ---
 
@@ -237,8 +261,8 @@ aftersec commit                        # Create baseline snapshot
 aftersec diff                          # Compare to baseline
 aftersec history                       # View commit history
 
-# Enterprise Mode
-aftersec enroll --server api.example.com:9090
+# Enterprise Mode (after bootstrap wrote ~/.aftersec/config.yaml)
+aftersec enroll ONE-TIME-CODE
 aftersec heartbeat                     # Send status update
 aftersec sync                          # Upload scan results
 
@@ -356,7 +380,7 @@ aftersec generate-honeypot --type aws-credentials
 
 ## 🏢 Enterprise Deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for comprehensive production deployment guide.
+Client machines install from the [endpoint bootstrap](#endpoint-bootstrap). The server publishes that script only after `AFTERSEC_BOOTSTRAP_PUBLIC_KEY`, `AFTERSEC_BOOTSTRAP_MANIFEST`, and `AFTERSEC_BOOTSTRAP_DIR` are set.
 
 ### Quick Enterprise Setup
 
@@ -365,21 +389,18 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for comprehensive production deployment guide
 ./scripts/generate-certs.sh ./certs 3650
 
 # 2. Configure environment
-cp .env.example .env
-vim .env  # Set DATABASE_URL, JWT_SECRET, MTLS_ENABLED
+cp .env.production.example .env
+vim .env  # Set POSTGRES_PASSWORD, DATABASE_URL, and JWT_SECRET
 
 # 3. Deploy stack
-docker-compose -f docker-compose.prod.yml up -d
+docker-compose -f docker-compose.production.yml up -d
 
-# 4. Configure reverse proxy (Nginx)
-# See DEPLOYMENT.md for Nginx configuration
-
-# 5. Enroll clients
-aftersec enroll \
-  --server api.example.com:9090 \
-  --ca-cert certs/ca.crt \
-  --client-cert certs/client.crt \
-  --client-key certs/client.key
+# 4. Enroll a client after comparing the script hash with X-Aftersec-Bootstrap-SHA256
+python3 install.py \
+  --server https://mgmt.example:8080 \
+  --tenant org-1 \
+  --grpc mgmt.example:9090 \
+  --code ONE-TIME-CODE
 ```
 
 ### Dashboard Access
@@ -401,6 +422,11 @@ aftersec enroll \
 ```
 Health Check
 GET /api/v1/health
+
+Bootstrap (no JWT; 503 until the publisher is configured)
+GET /api/v1/bootstrap/install.py
+GET /api/v1/bootstrap/manifest
+GET /api/v1/bootstrap/artifacts/<sha256>
 
 Organizations
 GET    /api/v1/organizations
@@ -436,7 +462,7 @@ See [api/proto/aftersec.proto](api/proto/aftersec.proto) for full protocol defin
 
 ### Authentication
 
-All API requests require JWT authentication:
+Operator routes require a JWT. The bootstrap routes do not:
 
 ```bash
 # Login to get token
