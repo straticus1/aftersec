@@ -1,9 +1,12 @@
 import React from 'react';
 import { getEndpoints } from '@/lib/api';
+import { auth } from '@/auth';
 import Link from 'next/link';
 
 export default async function EndpointsPage() {
-  const endpoints = await getEndpoints();
+  const session = await auth();
+  const result = await getEndpoints(session?.accessToken ?? '');
+  const endpoints = result.rows;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-cyan-500/30 overflow-hidden relative">
@@ -33,22 +36,30 @@ export default async function EndpointsPage() {
                   <th className="px-6 py-4">Hostname</th>
                   <th className="px-6 py-4">Platform</th>
                   <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">Threat Score</th>
+                  <th className="px-6 py-4">Posture</th>
                   <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50">
-                {endpoints.map(ep => (
+                {result.error ? (
+                  <tr>
+                    <td className="px-6 py-8 text-slate-300" colSpan={6}>{result.error}</td>
+                  </tr>
+                ) : endpoints.length === 0 ? (
+                  <tr>
+                    <td className="px-6 py-8 text-slate-300" colSpan={6}>No endpoints are enrolled for this organization.</td>
+                  </tr>
+                ) : endpoints.map(ep => (
                   <tr key={ep.id} className="hover:bg-slate-800/30 transition-colors group">
                     <td className="px-6 py-4 font-mono text-slate-200">{ep.id}</td>
                     <td className="px-6 py-4 font-mono text-indigo-300">{ep.hostname}</td>
                     <td className="px-6 py-4 text-slate-300">{ep.platform}</td>
                     <td className="px-6 py-4 flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full ${ep.status === 'inventory' ? 'bg-cyan-400' : ep.status === 'Online' ? 'bg-emerald-500' : 'bg-slate-600'}`}></span>
+                      <span className={`w-2 h-2 rounded-full ${ep.status === 'inventory' ? 'bg-cyan-400' : ep.status === 'active' ? 'bg-emerald-500' : 'bg-slate-600'}`}></span>
                       {ep.status}
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`px-2.5 py-1 rounded-md text-xs font-semibold ${ep.threatScore === 'Critical' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : ep.threatScore === 'Suspicious' || ep.threatScore === 'Check failed' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : ep.threatScore === 'Reported' ? 'bg-slate-500/10 text-slate-300 border border-slate-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+                      <span className={`px-2.5 py-1 rounded-md text-xs font-semibold ${ep.threatScore === 'Check failed' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-slate-500/10 text-slate-300 border border-slate-500/20'}`}>
                         {ep.threatScore}
                       </span>
                     </td>

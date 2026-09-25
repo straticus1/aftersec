@@ -92,6 +92,10 @@ func Collect(platform string, run Runner) Report {
 			facts["remote_login"] = call(run, "/usr/bin/systemctl", "is-enabled", "ssh")
 		case "windows":
 			facts["firewall"] = call(run, "windows-firewall")
+			facts["disk_encryption"] = call(run, "windows-disk")
+			facts["screen_lock"] = call(run, "windows-screen")
+			facts["auto_update"] = call(run, "windows-update")
+			facts["remote_login"] = call(run, "windows-remote")
 		}
 	}
 	report := Report{Platform: platform}
@@ -186,7 +190,7 @@ func interpret(platform, id string, got probe) State {
 		if text == "enabled" || text == "static" {
 			return Fail
 		}
-	case "windows\x00firewall":
+	case "windows\x00firewall", "windows\x00disk_encryption", "windows\x00screen_lock", "windows\x00auto_update", "windows\x00remote_login":
 		if text == "true" {
 			return Pass
 		}

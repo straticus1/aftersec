@@ -253,6 +253,18 @@ python3 install.py \
 
 The same script can install from a local signed manifest: `--manifest`, `--artifact-dir`, and `--public-key`. `python3 deploy/bootstrap.py --self-test` checks the signature verifier.
 
+Sign a release offline. The private key stays on the machine that runs this command. The output directory receives `manifest.json`, `public.pem`, and `artifacts/<sha256>`.
+
+```bash
+aftersec bootstrap sign \
+  --key /secure/bootstrap-ed25519.pem \
+  --version 1 \
+  --os darwin --arch arm64 \
+  --out /secure/bootstrap-release \
+  --file aftersec=bin/aftersec \
+  --file management-ca=certs/ca.pem
+```
+
 ---
 
 ## 🎯 Usage
@@ -303,8 +315,8 @@ aftersec-windows.exe report \
 
 Three services use the same answers on macOS, Linux, and Windows. An unknown answer is not a pass.
 
-- **Exposure** runs on each daemon scan and prints from `aftersec-windows exposure`. It checks the firewall, disk encryption, screen lock, automatic updates, and remote login. A missing tool or an unrecognized answer stays `unknown`. Windows currently answers the firewall check and leaves the others unknown.
-- **Provenance** classifies an execution. A regular file under `/usr/bin`, `/bin`, `/usr/sbin`, `/sbin`, `/usr/lib`, `/usr/libexec`, or `/System`, with a parent, is `allow` and is not logged. Anything else on macOS or Linux is `suspicious`. Windows is `unsupported`, not allow.
+- **Exposure** runs on each daemon scan and prints from `aftersec-windows exposure`. It checks the firewall, disk encryption, screen lock, automatic updates, and remote login. A missing tool or an unrecognized answer stays `unknown`. On Windows those checks are BitLocker for the system drive, the machine inactivity lock timeout, Windows Update policy `AUOptions` 4, and Remote Desktop denied. A missing policy stays `unknown`.
+- **Provenance** classifies an execution. Allow requires a regular file under `/usr/bin`, `/bin`, `/usr/sbin`, `/sbin`, `/usr/lib`, `/usr/libexec`, or `/System`, a parent, and a SHA-256 of a file that is not group- or world-writable and not larger than 32MiB. A missing hash is `suspicious`. Windows is `unsupported`, not allow. Allows are not logged.
 - **Capability gate** refuses a signed remote action when the endpoint platform is Windows or unrecognized. macOS and Linux keep the existing action list.
 
 ### Preserve

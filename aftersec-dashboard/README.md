@@ -159,7 +159,7 @@ Use the centralized API client in `src/lib/api.ts`:
 ```typescript
 import { getEndpoints } from '@/lib/api';
 
-const endpoints = await getEndpoints(accessToken);
+const { rows, error } = await getEndpoints(accessToken);
 ```
 
 ### Styling

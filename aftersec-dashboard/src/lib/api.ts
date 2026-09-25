@@ -27,28 +27,35 @@ function mapServerEndpoint(row: ServerEndpoint): Endpoint | null {
     hostname: row.hostname,
     platform: row.platform_version ? `${row.platform} ${row.platform_version}` : row.platform,
     status: row.enrollment_status,
-    threatScore: row.enrollment_status === 'inventory' ? (failed ? 'Check failed' : 'Reported') : 'Safe',
+    threatScore: row.enrollment_status === 'inventory' ? (failed ? 'Check failed' : 'Reported') : 'enrolled',
   };
 }
 
-// Sample rows stay visible only when the server has no endpoints yet.
-export async function getEndpoints(): Promise<Endpoint[]> {
+export async function getEndpoints(accessToken: string): Promise<{ rows: Endpoint[]; error: string }> {
+  if (!accessToken) {
+    return { rows: [], error: 'Sign in to view endpoints.' };
+  }
   try {
-    const res = await fetch(`${API_URL}/endpoints`, { cache: 'no-store' });
-    if (!res.ok) throw new Error('API error');
-    const body: unknown = await res.json();
-    if (Array.isArray(body)) {
-      const mapped = body.map((row) => mapServerEndpoint(row as ServerEndpoint)).filter((row): row is Endpoint => row !== null);
-      if (mapped.length > 0) return mapped;
+    const res = await fetch(`${API_URL}/endpoints`, {
+      cache: 'no-store',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.status === 401) {
+      return { rows: [], error: 'The server rejected this session.' };
     }
-    return [
-      { id: 'HW-MACBOOK-PRO-9X', hostname: 'ryan-mbp', platform: 'macOS 14.2', status: 'Online', threatScore: 'Safe' },
-      { id: 'HW-UBUNTU-SERV-01', hostname: 'prod-backend-1', platform: 'Linux 6.5', status: 'Online', threatScore: 'Safe' },
-      { id: 'HW-WIN11-ENG-04', hostname: 'eng-workstation', platform: 'Windows 11', status: 'Lost', threatScore: 'Critical' },
-      { id: 'HW-MACBOOK-AIR-22', hostname: 'guest-mac', platform: 'macOS 14.1', status: 'Offline', threatScore: 'Suspicious' }
-    ];
-  } catch (error) {
-    return [];
+    if (!res.ok) {
+      return { rows: [], error: 'The endpoint list is unavailable.' };
+    }
+    const body: unknown = await res.json();
+    if (!Array.isArray(body)) {
+      return { rows: [], error: 'The endpoint list was not a list.' };
+    }
+    return {
+      rows: body.map((row) => mapServerEndpoint(row as ServerEndpoint)).filter((row): row is Endpoint => row !== null),
+      error: '',
+    };
+  } catch {
+    return { rows: [], error: 'The endpoint list is unavailable.' };
   }
 }
 

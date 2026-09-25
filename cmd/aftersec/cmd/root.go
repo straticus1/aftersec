@@ -20,6 +20,9 @@ var rootCmd = &cobra.Command{
 	Use:   "aftersec",
 	Short: "AfterSec MacOS Security Posture Manager",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if cmd.Annotations["skipConfig"] == "true" {
+			return nil
+		}
 		var err error
 		if cfgFile != "" {
 			globalCfg, err = client.LoadConfig(cfgFile)

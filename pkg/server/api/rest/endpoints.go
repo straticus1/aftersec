@@ -50,16 +50,23 @@ func (rt *Router) handleEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (rt *Router) listEndpoints(w http.ResponseWriter, r *http.Request) {
-	orgID := r.URL.Query().Get("org_id")
-
-	endpoints, err := rt.repos.Endpoints.List(r.Context(), orgID)
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims.OrganizationID == "" {
+		http.Error(w, "Validated authorization claims are required", http.StatusUnauthorized)
+		return
+	}
+	endpoints, err := rt.repos.Endpoints.List(r.Context(), claims.OrganizationID)
 	if err != nil {
 		http.Error(w, "Failed to list endpoints", http.StatusInternalServerError)
 		return
 	}
-
+	if endpoints == nil {
+		endpoints = []*repository.Endpoint{}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(endpoints)
+	if err := json.NewEncoder(w).Encode(endpoints); err != nil {
+		return
+	}
 }
 
 func (rt *Router) getEndpoint(w http.ResponseWriter, r *http.Request, id string) {

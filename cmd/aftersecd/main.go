@@ -845,9 +845,8 @@ func main() {
 				}
 
 				if event.Type == edr.EventNotifyExec {
-					info, statErr := os.Lstat(event.ExecPath)
-					regular := statErr == nil && info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0
-					obs := provenance.Observe(runtime.GOOS, event.ExecPath, event.ActorPath, regular)
+					hash, sealed := provenance.Inspect(event.ExecPath)
+					obs := provenance.Observe(runtime.GOOS, event.ExecPath, event.ActorPath, hash, sealed)
 					if obs.Class != provenance.Allow {
 						if payload, err := json.Marshal(obs); err != nil {
 							log.Printf("provenance encode failed: %v", err)

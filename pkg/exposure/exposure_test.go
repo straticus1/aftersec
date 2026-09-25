@@ -56,4 +56,17 @@ func TestParsersAreExact(t *testing.T) {
 	if windows.Decision != Fail {
 		t.Fatalf("windows %+v", windows)
 	}
+	healthy := Collect("windows", func(string, ...string) (string, bool) { return "true", true })
+	if healthy.Decision != Pass {
+		t.Fatalf("windows healthy %+v", healthy)
+	}
+	partial := Collect("windows", func(name string, _ ...string) (string, bool) {
+		if name == "windows-disk" {
+			return "", false
+		}
+		return "true", true
+	})
+	if partial.Decision == Pass {
+		t.Fatal("missing disk encryption passed")
+	}
 }
