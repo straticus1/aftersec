@@ -62,6 +62,33 @@ var forensicsPersistenceCmd = &cobra.Command{
 	},
 }
 
+var forensicsRootkitCmd = &cobra.Command{
+	Use:   "rootkit",
+	Short: "Compare kernel and user views for hidden processes and kernel loads",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		findings, err := forensics.InitRootkitDetector(globalMgr).PerformFullScan()
+		if findings == nil {
+			findings = []forensics.RootkitFinding{}
+		}
+		if printErr := printOutput(findings); printErr != nil {
+			return printErr
+		}
+		return err
+	},
+}
+
+var forensicsProcessesCmd = &cobra.Command{
+	Use:   "processes",
+	Short: "Score running processes against the local behavior record",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		findings, err := forensics.ScanRunningProcesses(globalMgr)
+		if err != nil {
+			return err
+		}
+		return printOutput(findings)
+	},
+}
+
 var baselineCmd = &cobra.Command{
 	Use:   "baseline",
 	Short: "Manage security baselines",
@@ -239,6 +266,8 @@ func printOutput(value any) error {
 func init() {
 	pluginCmd.AddCommand(pluginListCmd)
 	forensicsCmd.AddCommand(forensicsPersistenceCmd)
+	forensicsCmd.AddCommand(forensicsRootkitCmd)
+	forensicsCmd.AddCommand(forensicsProcessesCmd)
 	baselineCmd.AddCommand(baselineListCmd)
 	configCmd.AddCommand(configShowCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)

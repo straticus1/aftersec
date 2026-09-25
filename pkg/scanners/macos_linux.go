@@ -10,6 +10,7 @@ import (
 
 	"aftersec/pkg/client/storage"
 	"aftersec/pkg/core"
+	"aftersec/pkg/plugins"
 )
 
 // MacOSScanner is named for API compatibility with the darwin side.
@@ -444,8 +445,10 @@ func (s *MacOSScanner) Scan(progress func(float64, string)) (*core.SecurityState
 	// 16. Delegate to cross-platform deep scanners
 	ScanSecrets(addFinding)
 	ScanVulnerabilities(addFinding)
+	ScanMalware(addFinding)
 	ScanAgentSurface(addFinding)
 	ScanArtifacts(addFinding)
+	plugins.ScanStarlark(s.db, addFinding)
 
 	return state, nil
 }

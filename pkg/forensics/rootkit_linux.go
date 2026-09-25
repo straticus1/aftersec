@@ -7,65 +7,32 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
-
-	"aftersec/pkg/client/storage"
 )
 
-// RootkitFinding represents a detected rootkit indicator.
-type RootkitFinding struct {
-	DetectionType string
-	Severity      string
-	KEXTName      string // reused on Linux for kernel module name
-	KEXTPath      string
-	ThreatScore   float64
-	Evidence      map[string]interface{}
-	Timestamp     time.Time
-	Remediation   string
-}
-
-// RootkitDetector provides kernel-level threat detection on Linux.
-type RootkitDetector struct {
-	mu sync.RWMutex
-	db storage.Manager
-}
-
-var rootkitDetector *RootkitDetector
-var rootkitOnce sync.Once
-
-// InitRootkitDetector returns the singleton detector, creating it on first call.
-func InitRootkitDetector(db storage.Manager) *RootkitDetector {
-	rootkitOnce.Do(func() {
-		rootkitDetector = &RootkitDetector{db: db}
-	})
-	return rootkitDetector
-}
-
-// PerformFullScan runs four independent detection passes and returns all findings.
+// PerformFullScan compares /proc views. A required view that cannot be read
+// returns an error. Findings collected before that failure are still returned.
 func (rd *RootkitDetector) PerformFullScan() ([]RootkitFinding, error) {
 	var findings []RootkitFinding
-
-	if f, err := rd.detectHiddenProcesses(); err == nil {
+	var failed error
+	collect := func(f []RootkitFinding, err error) {
 		findings = append(findings, f...)
-	}
-	if f, err := rd.detectLDPreload(); err == nil {
-		findings = append(findings, f...)
-	}
-	if f, err := rd.auditKernelModules(); err == nil {
-		findings = append(findings, f...)
-	}
-	if f, err := rd.detectOrphanedConnections(); err == nil {
-		findings = append(findings, f...)
-	}
-
-	if rd.db != nil {
-		for _, f := range findings {
-			rd.db.LogTelemetryEvent("rootkit_detection", f.DetectionType, f.Severity,
-				fmt.Sprintf(`{"module": "%s", "score": %.2f}`, f.KEXTName, f.ThreatScore))
+		if err != nil && failed == nil {
+			failed = err
 		}
 	}
-	return findings, nil
+	f, err := rd.detectHiddenProcesses()
+	collect(f, err)
+	f, err = rd.detectLDPreload()
+	collect(f, err)
+	f, err = rd.auditKernelModules()
+	collect(f, err)
+	f, err = rd.detectOrphanedConnections()
+	collect(f, err)
+	if logErr := rd.record(findings); logErr != nil && failed == nil {
+		failed = logErr
+	}
+	return findings, failed
 }
 
 // ── hidden process detection ──────────────────────────────────────────────────
@@ -81,7 +48,7 @@ func (rd *RootkitDetector) detectHiddenProcesses() ([]RootkitFinding, error) {
 	if err != nil {
 		return nil, err
 	}
-	visible := make(map[int]bool, len(entries))
+	visible := make(map[int]struct{}, len(entries))
 	maxPID := 0
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -89,35 +56,57 @@ func (rd *RootkitDetector) detectHiddenProcesses() ([]RootkitFinding, error) {
 		}
 		var pid int
 		if _, err := fmt.Sscanf(e.Name(), "%d", &pid); err == nil && pid > 0 {
-			visible[pid] = true
+			visible[pid] = struct{}{}
 			if pid > maxPID {
 				maxPID = pid
 			}
 		}
 	}
+	if len(visible) == 0 {
+		return nil, fmt.Errorf("process view is empty")
+	}
 
-	// Cap probe range: read kernel pid_max, hard-cap at 32768 for scan time.
 	probeMax := 32768
-	if data, err := os.ReadFile("/proc/sys/kernel/pid_max"); err == nil {
-		var v int
-		if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &v); err == nil && v < probeMax {
-			probeMax = v
-		}
+	data, err := os.ReadFile("/proc/sys/kernel/pid_max")
+	if err != nil {
+		return nil, fmt.Errorf("process view is unavailable")
+	}
+	var pidMax int
+	if _, err = fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pidMax); err != nil || pidMax <= 0 {
+		return nil, fmt.Errorf("process view is unreadable")
+	}
+	if pidMax < probeMax {
+		probeMax = pidMax
 	}
 	if maxPID+100 < probeMax {
-		probeMax = maxPID + 100 // no need to scan beyond seen max + small buffer
+		probeMax = maxPID + 100
 	}
 
-	// Method B: direct stat access (one syscall per PID, fast)
-	var findings []RootkitFinding
+	var candidates []int
 	for pid := 1; pid <= probeMax; pid++ {
-		if visible[pid] {
+		if _, ok := visible[pid]; ok {
 			continue
 		}
-		if _, err := os.Stat(fmt.Sprintf("/proc/%d/stat", pid)); err != nil {
-			continue // process does not exist
+		if _, err = os.Stat(fmt.Sprintf("/proc/%d/stat", pid)); err != nil {
+			continue
 		}
-		// Stat succeeded but readdir didn't show it — getdents hook detected.
+		candidates = append(candidates, pid)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	second, err := procPIDSet()
+	if err != nil {
+		return nil, err
+	}
+	var findings []RootkitFinding
+	for _, pid := range candidates {
+		if _, ok := second[pid]; ok {
+			continue
+		}
+		if _, err = os.Stat(fmt.Sprintf("/proc/%d/stat", pid)); err != nil {
+			continue
+		}
 		comm := procReadComm(pid)
 		findings = append(findings, RootkitFinding{
 			DetectionType: "hidden_process",
@@ -130,10 +119,31 @@ func (rd *RootkitDetector) detectHiddenProcesses() ([]RootkitFinding, error) {
 				"stat_accessible": true,
 			},
 			Timestamp:   time.Now(),
-			Remediation: fmt.Sprintf("PID %d (%s) hidden from /proc readdir but accessible via direct path — likely getdents hook rootkit.", pid, comm),
+			Remediation: fmt.Sprintf("PID %d is missing from /proc directory listing and still stat-accessible.", pid),
 		})
 	}
 	return findings, nil
+}
+
+func procPIDSet() (map[int]struct{}, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, fmt.Errorf("process view is unavailable")
+	}
+	pids := map[int]struct{}{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		var pid int
+		if _, err := fmt.Sscanf(e.Name(), "%d", &pid); err == nil && pid > 0 {
+			pids[pid] = struct{}{}
+		}
+	}
+	if len(pids) == 0 {
+		return nil, fmt.Errorf("process view is empty")
+	}
+	return pids, nil
 }
 
 // ── LD_PRELOAD injection ──────────────────────────────────────────────────────
@@ -141,16 +151,18 @@ func (rd *RootkitDetector) detectHiddenProcesses() ([]RootkitFinding, error) {
 func (rd *RootkitDetector) detectLDPreload() ([]RootkitFinding, error) {
 	var findings []RootkitFinding
 
-	// System-wide injection via /etc/ld.so.preload
-	if data, err := os.ReadFile("/etc/ld.so.preload"); err == nil {
+	data, err := os.ReadFile("/etc/ld.so.preload")
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("preload view is unavailable")
+	}
+	if err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || line[0] == '#' {
 				continue
 			}
-			score := 0.65
-			if strings.HasPrefix(line, "/tmp") || strings.HasPrefix(line, "/dev/shm") ||
-				strings.HasPrefix(line, "/var/tmp") {
+			score := 0.85
+			if suspiciousLibraryPath(line) {
 				score = 0.95
 			}
 			findings = append(findings, RootkitFinding{
@@ -162,13 +174,15 @@ func (rd *RootkitDetector) detectLDPreload() ([]RootkitFinding, error) {
 					"library": line,
 				},
 				Timestamp:   time.Now(),
-				Remediation: fmt.Sprintf("Remove suspicious entry from /etc/ld.so.preload: %s", line),
+				Remediation: "A system-wide preload is configured. Remove the entry after confirming it is unexpected.",
 			})
 		}
 	}
 
-	// Per-process LD_PRELOAD in /proc/<pid>/environ (null-delimited)
-	entries, _ := os.ReadDir("/proc")
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return findings, fmt.Errorf("process view is unavailable")
+	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -186,22 +200,21 @@ func (rd *RootkitDetector) detectLDPreload() ([]RootkitFinding, error) {
 				continue
 			}
 			libs := strings.TrimPrefix(env, "LD_PRELOAD=")
-			score := 0.70
-			if strings.Contains(libs, "/tmp") || strings.Contains(libs, "/dev/shm") {
-				score = 0.95
+			if !suspiciousLibraryPath(libs) {
+				continue
 			}
 			comm := procReadComm(pid)
 			findings = append(findings, RootkitFinding{
 				DetectionType: "ldpreload_injection",
-				Severity:      severityFromScoreRK(score),
-				ThreatScore:   score,
+				Severity:      "critical",
+				ThreatScore:   0.95,
 				Evidence: map[string]interface{}{
 					"pid":       pid,
 					"comm":      comm,
 					"libraries": libs,
 				},
 				Timestamp:   time.Now(),
-				Remediation: fmt.Sprintf("Process %d (%s) has LD_PRELOAD=%s — investigate for userland rootkit.", pid, comm, libs),
+				Remediation: fmt.Sprintf("PID %d has a preload library outside the operating-system library directories.", pid),
 			})
 		}
 	}
@@ -222,12 +235,13 @@ func (rd *RootkitDetector) auditKernelModules() ([]RootkitFinding, error) {
 		return nil, err
 	}
 
-	// Build /sys/module set for cross-view comparison.
-	sysModules := make(map[string]bool)
-	if entries, err := os.ReadDir("/sys/module"); err == nil {
-		for _, e := range entries {
-			sysModules[e.Name()] = true
-		}
+	entries, err := os.ReadDir("/sys/module")
+	if err != nil {
+		return nil, fmt.Errorf("module view is unavailable")
+	}
+	sysModules := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		sysModules[e.Name()] = true
 	}
 
 	var findings []RootkitFinding
@@ -240,48 +254,27 @@ func (rd *RootkitDetector) auditKernelModules() ([]RootkitFinding, error) {
 			continue
 		}
 		name := fields[0]
-
-		var score float64
-		var reasons []string
-
-		// Known rootkit name
+		known := false
 		lower := strings.ToLower(name)
 		for _, rk := range knownRootkitModules {
 			if strings.Contains(lower, rk) {
-				score += 0.6
-				reasons = append(reasons, fmt.Sprintf("name matches known rootkit: %s", rk))
+				known = true
 				break
 			}
 		}
-
-		// Generic suspicious keywords
-		for _, kw := range []string{"hide", "hook", "stealth", "backdoor", "keylog", "sniff"} {
-			if strings.Contains(lower, kw) {
-				score += 0.4
-				reasons = append(reasons, fmt.Sprintf("name contains suspicious keyword: %s", kw))
-				break
-			}
-		}
-
-		// Kernel taint flags via /sys/module/<name>/taint
-		if taintData, err := os.ReadFile(fmt.Sprintf("/sys/module/%s/taint", name)); err == nil {
-			taint := strings.TrimSpace(string(taintData))
-			if taint != "" {
-				score += 0.25
-				reasons = append(reasons, fmt.Sprintf("kernel taint flags: %s", taint))
-			}
-		}
-
-		// DKOM indicator: visible in /proc/modules but absent from /sys/module
-		if !sysModules[name] {
-			score += 0.45
-			reasons = append(reasons, "module in /proc/modules but absent from /sys/module (possible DKOM)")
-		}
-
-		if score < 0.4 {
+		inSys := sysModules[name]
+		if !moduleNeedsReview(known, inSys) {
 			continue
 		}
-		score = min(score, 1.0)
+		reasons := []string{}
+		score := 0.8
+		if known {
+			reasons = append(reasons, "name matches a documented rootkit module")
+			score = 0.95
+		}
+		if !inSys {
+			reasons = append(reasons, "module is listed in /proc/modules and missing from /sys/module")
+		}
 		findings = append(findings, RootkitFinding{
 			DetectionType: "suspicious_kernel_module",
 			Severity:      severityFromScoreRK(score),
@@ -292,7 +285,7 @@ func (rd *RootkitDetector) auditKernelModules() ([]RootkitFinding, error) {
 				"reasons": reasons,
 			},
 			Timestamp:   time.Now(),
-			Remediation: fmt.Sprintf("Investigate module '%s': sudo rmmod %s && dmesg | tail -20", name, name),
+			Remediation: "A kernel module disagrees with sysfs or matches a documented rootkit name. Inspect it before removing it.",
 		})
 	}
 	return findings, nil
@@ -312,18 +305,29 @@ type tcpConnInfo struct {
 
 func (rd *RootkitDetector) detectOrphanedConnections() ([]RootkitFinding, error) {
 	conns := make(map[uint64]tcpConnInfo)
+	saw := false
 	for _, path := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
-		if err := parseProcNetTCP(path, conns); err != nil {
+		err := parseProcNetTCP(path, conns)
+		if os.IsNotExist(err) {
 			continue
 		}
+		if err != nil {
+			return nil, fmt.Errorf("tcp view is unavailable")
+		}
+		saw = true
+	}
+	if !saw {
+		return nil, fmt.Errorf("tcp view is unavailable")
 	}
 	if len(conns) == 0 {
 		return nil, nil
 	}
 
-	// Collect all socket inodes owned by any process fd.
 	owned := make(map[uint64]bool)
-	entries, _ := os.ReadDir("/proc")
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, fmt.Errorf("process view is unavailable")
+	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -396,15 +400,20 @@ func parseProcNetTCP(path string, out map[uint64]tcpConnInfo) error {
 		// Fields: sl local_addr rem_addr state tx_queue:rx_queue tr:tm uid timeout inode ...
 		fields := strings.Fields(scanner.Text())
 		if len(fields) < 10 {
-			continue
+			return fmt.Errorf("tcp view is unreadable")
 		}
 		var inode uint64
-		fmt.Sscanf(fields[9], "%d", &inode)
+		if _, err = fmt.Sscanf(fields[9], "%d", &inode); err != nil || inode == 0 {
+			return fmt.Errorf("tcp view is unreadable")
+		}
 		out[inode] = tcpConnInfo{
 			local:  fields[1],
 			remote: fields[2],
 			state:  fields[3],
 		}
+	}
+	if err = scanner.Err(); err != nil {
+		return fmt.Errorf("tcp view is unreadable")
 	}
 	return nil
 }
@@ -412,7 +421,10 @@ func parseProcNetTCP(path string, out map[uint64]tcpConnInfo) error {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func procReadComm(pid int) string {
-	data, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return ""
+	}
 	return strings.TrimSpace(string(data))
 }
 

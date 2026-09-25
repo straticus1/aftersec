@@ -25,14 +25,14 @@ func getScriptsDir() string {
 }
 
 var allowedCommands = map[string][]string{
-	"defaults_read":    {"defaults", "read"},
-	"system_profiler":  {"system_profiler"},
-	"csrutil_status":   {"csrutil", "status"},
-	"spctl_status":     {"spctl", "--status"},
-	"pmset":            {"pmset", "-g"},
-	"networksetup":     {"networksetup"},
-	"diskutil":         {"diskutil", "info"},
-	"fdesetup":         {"fdesetup", "status"},
+	"defaults_read":   {"defaults", "read"},
+	"system_profiler": {"system_profiler"},
+	"csrutil_status":  {"csrutil", "status"},
+	"spctl_status":    {"spctl", "--status"},
+	"pmset":           {"pmset", "-g"},
+	"networksetup":    {"networksetup"},
+	"diskutil":        {"diskutil", "info"},
+	"fdesetup":        {"fdesetup", "status"},
 }
 
 func NumStarlarkRules() int {
@@ -51,12 +51,46 @@ func NumStarlarkRules() int {
 
 func ScanStarlark(db storage.Manager, addFinding func(core.Finding)) {
 	scriptsDir := getScriptsDir()
-	if _, err := os.Stat(scriptsDir); os.IsNotExist(err) {
+	info, err := os.Stat(scriptsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		addFinding(core.Finding{
+			Category:    "Plugins",
+			Name:        "Starlark rules",
+			Description: "The rules directory could not be read. That is not a pass.",
+			Severity:    core.High,
+			CurrentVal:  "unreadable",
+			ExpectedVal: "readable directory",
+			Passed:      false,
+		})
+		return
+	}
+	if !info.IsDir() {
+		addFinding(core.Finding{
+			Category:    "Plugins",
+			Name:        "Starlark rules",
+			Description: "The rules path is not a directory.",
+			Severity:    core.High,
+			CurrentVal:  "not a directory",
+			ExpectedVal: "directory",
+			Passed:      false,
+		})
 		return
 	}
 
 	files, err := os.ReadDir(scriptsDir)
 	if err != nil {
+		addFinding(core.Finding{
+			Category:    "Plugins",
+			Name:        "Starlark rules",
+			Description: "The rules directory could not be listed. That is not a pass.",
+			Severity:    core.High,
+			CurrentVal:  "unreadable",
+			ExpectedVal: "readable directory",
+			Passed:      false,
+		})
 		return
 	}
 
@@ -106,7 +140,7 @@ func ScanStarlark(db storage.Manager, addFinding func(core.Finding)) {
 			var category, name, desc, sev, currentVal, expected string
 			var passed bool
 			var remediationScript string
-			
+
 			if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 				"category", &category,
 				"name", &name,
@@ -138,28 +172,38 @@ func ScanStarlark(db storage.Manager, addFinding func(core.Finding)) {
 
 		sysctlGet := starlark.NewBuiltin("sysctl_get", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 			var name string
-			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil { return nil, err }
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil {
+				return nil, err
+			}
 			val, err := tuning.GetSysctl(name)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			return starlark.String(val), nil
 		})
 
 		sysctlSet := starlark.NewBuiltin("sysctl_set", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 			var name, val string
-			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name, "val", &val); err != nil { return nil, err }
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name, "val", &val); err != nil {
+				return nil, err
+			}
 			return starlark.None, tuning.SetSysctl(name, val)
 		})
 
 		toggleFeature := starlark.NewBuiltin("toggle_feature", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 			var domain, key string
 			var enabled bool
-			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "domain", &domain, "key", &key, "enabled", &enabled); err != nil { return nil, err }
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "domain", &domain, "key", &key, "enabled", &enabled); err != nil {
+				return nil, err
+			}
 			return starlark.None, tuning.SetBooleanDefault(domain, key, enabled)
 		})
 
 		scanProcesses := starlark.NewBuiltin("scan_processes", func(_ *starlark.Thread, _ *starlark.Builtin, _ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
 			procs, err := forensics.ScanRunningProcesses(db)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			list := starlark.NewList(nil)
 			for _, p := range procs {
 				dict := starlark.NewDict(10)
@@ -184,17 +228,25 @@ func ScanStarlark(db storage.Manager, addFinding func(core.Finding)) {
 
 		aiAnalyzeThreat := starlark.NewBuiltin("ai_analyze_threat", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 			var telemetry string
-			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "telemetry", &telemetry); err != nil { return nil, err }
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "telemetry", &telemetry); err != nil {
+				return nil, err
+			}
 			analysis, err := ai.AnalyzeThreat(context.Background(), telemetry)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			return starlark.String(analysis), nil
 		})
 
 		verifySignature := starlark.NewBuiltin("verify_signature", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 			var filePath string
-			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &filePath); err != nil { return nil, err }
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &filePath); err != nil {
+				return nil, err
+			}
 			info, err := forensics.VerifySignature(filePath)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			dict := starlark.NewDict(3)
 			dict.SetKey(starlark.String("valid"), starlark.Bool(info.Valid))
 			dict.SetKey(starlark.String("authority"), starlark.String(info.Authority))
@@ -204,43 +256,59 @@ func ScanStarlark(db storage.Manager, addFinding func(core.Finding)) {
 
 		analyzeBinary := starlark.NewBuiltin("ai_analyze_binary", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 			var filePath string
-			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &filePath); err != nil { return nil, err }
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &filePath); err != nil {
+				return nil, err
+			}
 			out, _ := exec.Command("strings", filePath).CombinedOutput()
 			strOut := string(out)
-			if len(strOut) > 4000 { strOut = strOut[:4000] }
+			if len(strOut) > 4000 {
+				strOut = strOut[:4000]
+			}
 			analysis, err := ai.AnalyzeBinarySemantics(context.Background(), strOut)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			return starlark.String(analysis), nil
 		})
 
 		deployHoneypot := starlark.NewBuiltin("deploy_honeypot", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 			var decoyType, destPath string
-			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "type", &decoyType, "path", &destPath); err != nil { return nil, err }
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "type", &decoyType, "path", &destPath); err != nil {
+				return nil, err
+			}
 			content, err := ai.GenerateHoneypotContent(context.Background(), decoyType)
-			if err != nil { return nil, err }
-			if err := os.WriteFile(destPath, []byte(content), 0644); err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(destPath, []byte(content), 0644); err != nil {
+				return nil, err
+			}
 			return starlark.String("Honeypot Deployed"), nil
 		})
 
 		aiSwarm := starlark.NewBuiltin("ai_swarm_judge", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 			var telemetry string
-			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "telemetry", &telemetry); err != nil { return nil, err }
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "telemetry", &telemetry); err != nil {
+				return nil, err
+			}
 			analysis, err := ai.AnalyzeThreatSwarm(context.Background(), telemetry)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			return starlark.String(analysis), nil
 		})
 
 		env := starlark.StringDict{
-			"run_command":    runCmd,
-			"report_finding": reportFinding,
-			"sysctl_get":     sysctlGet,
-			"sysctl_set":     sysctlSet,
-			"toggle_feature": toggleFeature,
-			"scan_processes": scanProcesses,
-			"purge_ram":      simpleTool("purge_ram", tuning.PurgeRAM),
-			"flush_dns":      simpleTool("flush_dns", tuning.FlushDNS),
-			"clear_caches":   simpleTool("clear_caches", tuning.ClearSystemCaches),
-			"empty_trash":    simpleTool("empty_trash", tuning.EmptyTrash),
+			"run_command":       runCmd,
+			"report_finding":    reportFinding,
+			"sysctl_get":        sysctlGet,
+			"sysctl_set":        sysctlSet,
+			"toggle_feature":    toggleFeature,
+			"scan_processes":    scanProcesses,
+			"purge_ram":         simpleTool("purge_ram", tuning.PurgeRAM),
+			"flush_dns":         simpleTool("flush_dns", tuning.FlushDNS),
+			"clear_caches":      simpleTool("clear_caches", tuning.ClearSystemCaches),
+			"empty_trash":       simpleTool("empty_trash", tuning.EmptyTrash),
 			"ai_analyze_threat": aiAnalyzeThreat,
 			"verify_signature":  verifySignature,
 			"ai_analyze_binary": analyzeBinary,

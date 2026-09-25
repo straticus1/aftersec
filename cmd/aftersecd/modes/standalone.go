@@ -202,6 +202,7 @@ func RunStandalone(cfg *client.ClientConfig, mgr storage.Manager) {
 		}
 		publishCompliance(cfg, hostnameOrUnknown(), currentState, mgr)
 		publishExposure(mgr)
+		publishRootkit(mgr)
 	}
 
 	runScan()

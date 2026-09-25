@@ -86,12 +86,7 @@ func ScanMalware(addFinding func(core.Finding)) {
 		return
 	}
 
-	// For posture scanning, we target critical persistence paths rather than full disk
-	targetPaths := []string{
-		"/Library/LaunchDaemons",
-		"/Library/LaunchAgents",
-		filepath.Join(home, "Library", "LaunchAgents"),
-	}
+	targetPaths := artifactRoots()
 
 	var allResults []*darkscan.ScanResult
 	scanStart := time.Now()

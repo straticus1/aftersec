@@ -104,6 +104,7 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager, glass *breakgl
 
 		publishCompliance(cfg, hwID, currentState, mgr)
 		publishExposure(mgr)
+		publishRootkit(mgr)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
