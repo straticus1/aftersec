@@ -52,6 +52,7 @@ type Router struct {
 	actionAudit     RemoteActionAudit
 	frames          *displayframes.Store
 	stolen          *stolen.Registry
+	bootstrap       *Bootstrap
 }
 
 // SetActionMinter enables signed remote response. A nil minter leaves the
@@ -70,6 +71,29 @@ func (r *Router) SetDisplayFrames(store *displayframes.Store) {
 
 func (r *Router) SetStolenRegistry(reg *stolen.Registry) {
 	r.stolen = reg
+}
+
+func (r *Router) SetBootstrap(b *Bootstrap) {
+	r.bootstrap = b
+}
+
+func (r *Router) handleBootstrap(kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if r.bootstrap == nil {
+			http.Error(w, "bootstrap is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		switch kind {
+		case "manifest":
+			r.bootstrap.ManifestHandler(w, req)
+		case "artifact":
+			r.bootstrap.ArtifactHandler(w, req)
+		case "script":
+			r.bootstrap.ScriptHandler(w, req)
+		default:
+			http.Error(w, "bootstrap is not configured", http.StatusServiceUnavailable)
+		}
+	}
 }
 
 // NewRouter initializes a fresh API layout.
@@ -120,6 +144,10 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 		router.banditLimiter = ratelimit.NewRedisRateLimiter(redisClient, "rl:bandit", 10, time.Minute/10)
 		router.darkwebLimiter = ratelimit.NewRedisRateLimiter(redisClient, "rl:darkweb", 20, time.Minute/20)
 	}
+
+	mux.HandleFunc("/api/v1/bootstrap/manifest", router.handleBootstrap("manifest"))
+	mux.HandleFunc("/api/v1/bootstrap/install.py", router.handleBootstrap("script"))
+	mux.HandleFunc("/api/v1/bootstrap/artifacts/", router.handleBootstrap("artifact"))
 
 	// Organizations API
 	mux.HandleFunc("/api/v1/organizations", jwtManager.HTTPMiddleware(router.handleOrganizations))

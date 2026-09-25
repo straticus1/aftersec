@@ -31,6 +31,20 @@ import (
 	"google.golang.org/grpc"
 )
 
+func openBootstrap() (*rest.Bootstrap, error) {
+	public := os.Getenv("AFTERSEC_BOOTSTRAP_PUBLIC_KEY")
+	manifest := os.Getenv("AFTERSEC_BOOTSTRAP_MANIFEST")
+	dir := os.Getenv("AFTERSEC_BOOTSTRAP_DIR")
+	script := os.Getenv("AFTERSEC_BOOTSTRAP_SCRIPT")
+	if public == "" && manifest == "" && dir == "" && script == "" {
+		return nil, nil
+	}
+	if script == "" {
+		script = "deploy/bootstrap.py"
+	}
+	return rest.LoadBootstrap(public, manifest, dir, script)
+}
+
 func openGeoResolver() (*geoip.Resolver, error) {
 	city := os.Getenv("AFTERSEC_GEOIP_CITY_DB")
 	asn := os.Getenv("AFTERSEC_GEOIP_ASN_DB")
@@ -222,6 +236,12 @@ func main() {
 	mux.SetActionAudit(repos.RemoteActionAudit)
 	mux.SetDisplayFrames(frames)
 	mux.SetStolenRegistry(stolenReg)
+	if boot, err := openBootstrap(); err != nil {
+		log.Fatalf("bootstrap publisher: %v", err)
+	} else if boot != nil {
+		mux.SetBootstrap(boot)
+		log.Print("bootstrap publisher enabled")
+	}
 	if keyPath := os.Getenv("REMOTE_ACTION_SIGNING_KEY_PATH"); keyPath != "" {
 		key, keyErr := os.ReadFile(keyPath)
 		if keyErr != nil || len(key) != ed25519.PrivateKeySize {
