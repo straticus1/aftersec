@@ -14,11 +14,11 @@
 
 ## Minimal Windows support
 
-Build with `./build.sh windows`, then run `bin/aftersec-windows.exe scan` on Windows. The standalone scanner checks Defender antivirus/real-time protection and all firewall profiles using Windows PowerShell. It emits JSON. Exit 0 means both checks passed, 1 means a failed or unavailable check, and 2 means a usage/platform error. Each command has a 15-second timeout and bounded output. It does not change system configuration.
+Build with `./build.sh windows`, then run `bin/aftersec-windows.exe` on Windows. `scan` checks Defender antivirus/real-time protection and all firewall profiles using Windows PowerShell and prints JSON. For `scan`, exit 0 means both checks passed, 1 means a check failed or could not be read, and 2 means the command was not run on Windows. `report` adds hostname, OS version, and last boot, then posts that document to `POST /api/v1/inventory/windows`. The URL must be `https://`. The process verifies the management CA from `--ca` and refuses redirects. For `report`, exit 0 means the server stored the document, 1 means it was not accepted, and 2 means the flags, CA, or operating system were rejected. A stored document can still contain a failed check. Each PowerShell command has a 15-second timeout and bounded output. The reporter does not change system configuration.
 
-`aftersec-windows report` posts that JSON, plus hostname, OS version, and last boot, to `POST /api/v1/inventory/windows` over TLS. The server records enrollment status `inventory` and does not issue a certificate, refresh token, or hardware quote. Remote actions against that row are refused. The signed bootstrap can deliver `aftersec-windows` for `windows`/`amd64` only.
+The report body carries a single-use enrollment code. The server stores the SHA-256 of that code, consumes it, and inserts an endpoint with `enrollment_status` `inventory`, platform `windows`, and the posture JSON. It does not write a hardware id, client certificate, or refresh token, and it does not record an attestation audit row. Remote actions against that endpoint return 403. `GET /api/v1/endpoints` lists the row for a caller with a JWT. The signed bootstrap delivers `aftersec-windows` only for `windows`/`amd64`, writes `aftersec-windows.exe`, and does not write an agent config.
 
-This is a separate minimal scanner. The full CLI, daemon, Unix sensors, GUI and enforcement stack are not Windows ports. Native Windows CI was added for scanner tests and compilation; local cross-compilation does not establish runtime behavior on Windows.
+This is a separate reporter. The full CLI, daemon, Unix sensors, GUI and enforcement stack are not Windows ports. Native Windows CI covers scanner tests and compilation; local cross-compilation does not establish runtime behavior on Windows.
 
 ## Enterprise configuration migration
 

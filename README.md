@@ -1,6 +1,6 @@
 # AfterSec
 
-Platform support and verification limits: [security/platform review](docs/PLATFORM_REVIEW.md). Linux and macOS use the main agent; `./build.sh windows` builds a minimal read-only Defender/firewall scanner.
+Platform support and verification limits: [security/platform review](docs/PLATFORM_REVIEW.md). Linux and macOS run the agent. `./build.sh windows` builds `aftersec-windows.exe`, a read-only reporter for Windows amd64. It is not an agent.
 
 
 **Next-Generation macOS Endpoint Detection & Response (EDR) with Multi-LLM AI Threat Analysis**
@@ -286,6 +286,19 @@ aftersec tune network                  # Network optimization
 aftersec tune dns                      # DNS security
 ```
 
+### Windows reporter
+
+`./build.sh windows` writes `bin/aftersec-windows.exe`. On Windows, `aftersec-windows scan` prints Defender real-time protection and the three firewall profiles as JSON and exits. Exit 0 means both checks passed, 1 means a check failed or could not be read, and 2 means the command was not run on Windows. `aftersec-windows report` adds hostname, OS version, and last boot, then posts that document. Exit 0 means the server stored it, including when a check inside the document failed. Exit 1 means the report was not accepted. Exit 2 means the flags, the CA file, or the operating system were rejected. The reporter does not change the machine and does not enroll as an agent.
+
+```bash
+aftersec-windows.exe scan
+aftersec-windows.exe report \
+  --server https://mgmt.example:8080 \
+  --tenant 11111111-1111-1111-1111-111111111111 \
+  --ca %USERPROFILE%\.aftersec\management-ca.pem \
+  --code ONE-TIME-CODE
+```
+
 ### Graphical Interface
 
 ```bash
@@ -421,6 +434,9 @@ python3 install.py \
   - Scan history and analysis
   - Threat score visualization
   - Organization management
+  - Endpoint list, including Windows rows whose `enrollment_status` is `inventory`
+
+The endpoints page shows server rows only when `GET /api/v1/endpoints` returns them. That route requires a JWT. A page request without a token does not receive the inventory list.
 
 ---
 
@@ -436,6 +452,9 @@ Bootstrap (no JWT; 503 until the publisher is configured)
 GET /api/v1/bootstrap/install.py
 GET /api/v1/bootstrap/manifest
 GET /api/v1/bootstrap/artifacts/<sha256>
+
+Windows inventory (no JWT; one-time enrollment code in the body)
+POST /api/v1/inventory/windows
 
 Organizations
 GET    /api/v1/organizations
@@ -471,7 +490,7 @@ See [api/proto/aftersec.proto](api/proto/aftersec.proto) for full protocol defin
 
 ### Authentication
 
-Operator routes require a JWT. The bootstrap routes do not:
+Operator routes require a JWT. The bootstrap routes do not. `POST /api/v1/inventory/windows` does not either: the body carries a single-use enrollment code, and the handler stores only its SHA-256. A created row has `enrollment_status` `inventory`. Remote actions against it return 403.
 
 ```bash
 # Login to get token
@@ -679,7 +698,8 @@ For commercial licensing inquiries: licensing@aftersec.io
 - [ ] SSO integration (SAML, OAuth2, LDAP)
 - [ ] Compliance reporting (CIS, NIST, SOC2)
 - [ ] Kubernetes Helm charts
-- [ ] Windows Defender integration
+- [x] Windows inventory reporter (Defender real-time protection and firewall profiles only)
+- [ ] Windows agent (daemon, enforcement, and remote actions)
 
 ### v2.0 (Q4 2026)
 - [ ] GraphQL API layer

@@ -15,6 +15,7 @@ All Go builds go through `./build.sh` (there is no Makefile):
 ./build.sh gui        # bin/aftersec-gui (Fyne GUI)
 ./build.sh daemon     # bin/aftersecd
 ./build.sh server     # bin/aftersec-server
+./build.sh windows    # bin/aftersec-windows.exe (read-only Windows amd64 reporter)
 ./build.sh lib        # bin/afterseclib.so (c-shared, from ./afterseclib)
 ./build.sh dashboard  # npm install && npm run build in aftersec-dashboard/
 ./build.sh proto      # regen gRPC code from api/proto/aftersec.proto
@@ -41,7 +42,7 @@ CGO builds pin `MACOSX_DEPLOYMENT_TARGET=11.0` (set by build.sh).
 
 ## Architecture
 
-- **Four Go binaries, one module** (`cmd/`): `aftersec` (CLI), `aftersec-gui` (Fyne desktop app), `aftersecd` (background EDR daemon — requires the `com.apple.developer.endpoint-security.client` entitlement on macOS, see `entitlements.plist`), and `aftersec-server` (enterprise management server). All share `pkg/`.
+- **Go binaries, one module** (`cmd/`): `aftersec` (CLI), `aftersec-gui` (Fyne desktop app), `aftersecd` (background EDR daemon — requires the `com.apple.developer.endpoint-security.client` entitlement on macOS, see `entitlements.plist`), `aftersec-server` (enterprise management server), and `aftersec-windows` (read-only Windows amd64 reporter). All share `pkg/`. The Windows binary does not enroll as an agent.
 - **Client side** (`pkg/client`, `pkg/core`, `pkg/edr`, `pkg/scanners`, `pkg/forensics`, `pkg/tuning`, `pkg/patchmgr`): `core` is the scanning engine; `edr` wraps the Apple Endpoint Security API (with a Linux variant — see `pkg/edr/es_client_linux*`); `scanners` implement posture checks; `plugins` runs Starlark custom checks.
 - **AI layer** (`pkg/ai`): multi-LLM threat analyst — sends events to OpenAI/Anthropic/Gemini, builds consensus verdicts, generates remediation scripts.
 - **Server side** (`pkg/server`, `pkg/api`, `api/proto/`, `migrations/`): gRPC server (port 9090, mTLS + JWT) for client enrollment and event streaming; REST API (port 8080) for orgs/endpoints/scans; PostgreSQL 15 with row-level security for multi-tenancy. Protocol is defined in `api/proto/aftersec.proto` — regenerate with `./build.sh proto` after editing.

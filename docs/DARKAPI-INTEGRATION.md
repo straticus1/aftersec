@@ -198,9 +198,12 @@ account access accordingly. No remote response commands are executed by this
 integration. The config endpoint is readable, not a new remote execution channel.
 
 macOS daemon/CLI and transport tests run locally. Linux uses existing Aftersec
-collectors and this same contract; Windows needs its existing native-agent work
-and an appropriate SQLite/CGO build plus protected service-account directory ACLs.
-This change does not turn the Unix daemon into a production Windows service.
+collectors and this same contract. The Windows inventory reporter
+(`aftersec-windows report`) posts Defender and firewall posture only; it does
+not collect DarkAPI evidence and it is not a Windows service. A DarkAPI
+collector on Windows still needs its own native-agent work and protected
+service-account directory ACLs. This change does not turn the Unix daemon into
+a production Windows service.
 Database retention/archival policy is still an operator responsibility; the new
 migration adds no destructive cleanup.
 
