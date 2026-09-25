@@ -201,6 +201,7 @@ func RunStandalone(cfg *client.ClientConfig, mgr storage.Manager) {
 			log.Printf("failed to save commit: %v", err)
 		}
 		publishCompliance(cfg, hostnameOrUnknown(), currentState, mgr)
+		publishExposure(mgr)
 	}
 
 	runScan()

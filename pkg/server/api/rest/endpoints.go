@@ -8,6 +8,8 @@ import (
 	"time"
 
 	grpcapi "aftersec/pkg/api/grpc"
+	"aftersec/pkg/oscap"
+	"aftersec/pkg/preserve"
 	"aftersec/pkg/response"
 	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/repository"
@@ -145,6 +147,10 @@ func (rt *Router) handleEndpointAction(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "inventory endpoints do not accept remote actions", http.StatusForbidden)
 			return
 		}
+		if endpoint != nil && !oscap.Allows(endpoint.Platform, string(req.Action)) {
+			http.Error(w, "this operating system cannot carry out that action", http.StatusForbidden)
+			return
+		}
 	}
 	if rt.actionMinter == nil || rt.enterpriseSrv == nil {
 		http.Error(w, "Remote response is not configured", http.StatusServiceUnavailable)
@@ -189,6 +195,33 @@ func (rt *Router) handleEndpointAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Action == response.ActionDisplayShot || req.Action == response.ActionDisplayRecord {
 		rt.enterpriseSrv.NoteDisplayCommand(req.EndpointID, cmdID, string(req.Action))
+	}
+	if req.Action == response.ActionPreserve || req.Action == response.ActionClearPreserve {
+		if rt.preserveReg == nil {
+			http.Error(w, "Preserve is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		if req.Action == response.ActionPreserve {
+			incident, reason, err := preserve.ParseMark(req.Arguments)
+			if err != nil {
+				http.Error(w, "Preserve mark is invalid", http.StatusBadRequest)
+				return
+			}
+			if err = rt.preserveReg.Mark(claims.OrganizationID, req.EndpointID, reason, incident); err != nil {
+				http.Error(w, "Preserve mark could not be recorded", http.StatusServiceUnavailable)
+				return
+			}
+			req.Arguments = map[string]string{"incident_id": incident, "reason": reason}
+		} else {
+			if len(req.Arguments) != 0 {
+				http.Error(w, "Preserve clear takes no arguments", http.StatusBadRequest)
+				return
+			}
+			if err := rt.preserveReg.Clear(claims.OrganizationID, req.EndpointID); err != nil {
+				http.Error(w, "Preserve mark could not be cleared", http.StatusServiceUnavailable)
+				return
+			}
+		}
 	}
 	if req.Action == response.ActionMarkStolen || req.Action == response.ActionClearStolen {
 		if rt.stolen == nil {

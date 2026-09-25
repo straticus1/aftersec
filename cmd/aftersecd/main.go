@@ -18,6 +18,7 @@ import (
 	"aftersec/pkg/forensics"
 	"aftersec/pkg/netsensor"
 	"aftersec/pkg/plugins"
+	"aftersec/pkg/provenance"
 	"aftersec/pkg/ransomware"
 	"aftersec/pkg/selfprotect"
 	"aftersec/pkg/tuning"
@@ -844,6 +845,16 @@ func main() {
 				}
 
 				if event.Type == edr.EventNotifyExec {
+					info, statErr := os.Lstat(event.ExecPath)
+					regular := statErr == nil && info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0
+					obs := provenance.Observe(runtime.GOOS, event.ExecPath, event.ActorPath, regular)
+					if obs.Class != provenance.Allow {
+						if payload, err := json.Marshal(obs); err != nil {
+							log.Printf("provenance encode failed: %v", err)
+						} else if err = mgr.LogTelemetryEvent("provenance", string(obs.Class), "high", string(payload)); err != nil {
+							log.Printf("provenance log failed: %v", err)
+						}
+					}
 					ev := event
 					select {
 					case accordSem <- struct{}{}:

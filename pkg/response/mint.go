@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"time"
+
+	"aftersec/pkg/preserve"
 )
 
 type EndpointOwnerLookup interface {
@@ -50,9 +52,9 @@ func (m *ActionMinter) Mint(ctx context.Context, r MintRequest) (string, error) 
 func roleAllows(role string, a Action) bool {
 	switch role {
 	case "admin":
-		return a == ActionKillProcess || a == ActionCollectFile || a == ActionReadMemory || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine || a == ActionBreakGlass || a == ActionDisplayShot || a == ActionDisplayRecord || a == ActionMarkStolen || a == ActionClearStolen
+		return a == ActionKillProcess || a == ActionCollectFile || a == ActionReadMemory || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine || a == ActionBreakGlass || a == ActionDisplayShot || a == ActionDisplayRecord || a == ActionMarkStolen || a == ActionClearStolen || a == ActionPreserve || a == ActionClearPreserve
 	case "security_operator":
-		return a == ActionKillProcess || a == ActionCollectFile || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine || a == ActionDisplayShot || a == ActionDisplayRecord || a == ActionMarkStolen || a == ActionClearStolen
+		return a == ActionKillProcess || a == ActionCollectFile || a == ActionListPersistence || a == ActionQuarantine || a == ActionReleaseQuarantine || a == ActionDisplayShot || a == ActionDisplayRecord || a == ActionMarkStolen || a == ActionClearStolen || a == ActionPreserve || a == ActionClearPreserve
 	}
 	return false
 }
@@ -78,4 +80,28 @@ func (m *ActionMinter) MintDelivered(ctx context.Context, tenant, endpoint strin
 		return "", fmt.Errorf("generate command ID: %w", err)
 	}
 	return SignActionToken(m.key, ActionClaims{ID: hex.EncodeToString(id[:]), TenantID: tenant, EndpointID: endpoint, Action: action, ExpiresAt: m.now().Add(m.ttl)})
+}
+
+// MintPreserve re-sends a preserve mark that an operator already recorded.
+// The incident id and reason come from the server registry, not from the client.
+func (m *ActionMinter) MintPreserve(ctx context.Context, tenant, endpoint, reason, incident string) (string, error) {
+	args := map[string]string{"incident_id": incident, "reason": reason}
+	if _, _, err := preserve.ParseMark(args); err != nil {
+		return "", fmt.Errorf("remote action is not authorized")
+	}
+	if len(m.key) != ed25519.PrivateKeySize || m.owners == nil || m.now == nil || m.ttl <= 0 || m.ttl > 5*time.Minute || tenant == "" || endpoint == "" {
+		return "", fmt.Errorf("remote action is not authorized")
+	}
+	owner, err := m.owners.OrganizationForEndpoint(ctx, endpoint)
+	if err != nil {
+		return "", fmt.Errorf("resolve endpoint ownership: %w", err)
+	}
+	if owner == "" || owner != tenant {
+		return "", fmt.Errorf("endpoint tenant mismatch")
+	}
+	var id [16]byte
+	if _, err = rand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("generate command ID: %w", err)
+	}
+	return SignActionToken(m.key, ActionClaims{ID: hex.EncodeToString(id[:]), TenantID: tenant, EndpointID: endpoint, Action: ActionPreserve, ExpiresAt: m.now().Add(m.ttl), Arguments: args})
 }

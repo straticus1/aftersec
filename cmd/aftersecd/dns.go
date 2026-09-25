@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"aftersec/pkg/dnsanalytics"
+	"aftersec/pkg/preserve"
 )
 
 type dnsTelemetryLogger interface {
@@ -45,6 +46,15 @@ func persistDNSQueries(
 			}
 			if err := logger.LogTelemetryEvent("dns_sensor", "process_dns_query", severity, string(details)); err != nil {
 				return fmt.Errorf("persist DNS detection: %w", err)
+			}
+			if class, ok := preserve.DNSClass(result.Domain, result.Suspicious, result.EntropyScore); ok {
+				notice, err := preserve.SealClass(class, "dns_sensor", "process_dns_query")
+				if err != nil {
+					return fmt.Errorf("encode preserve class: %w", err)
+				}
+				if err = logger.LogTelemetryEvent("preserve", "preserve_class", "high", string(notice)); err != nil {
+					return fmt.Errorf("persist preserve class: %w", err)
+				}
 			}
 			if _, err := correlator.RecordDNS(dnsanalytics.DNSObservation{
 				PID: result.PID, Domain: result.Domain, Suspicious: result.Suspicious, At: time.Now(),

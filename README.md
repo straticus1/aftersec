@@ -299,6 +299,20 @@ aftersec-windows.exe report \
   --code ONE-TIME-CODE
 ```
 
+### Cross-OS services
+
+Three services use the same answers on macOS, Linux, and Windows. An unknown answer is not a pass.
+
+- **Exposure** runs on each daemon scan and prints from `aftersec-windows exposure`. It checks the firewall, disk encryption, screen lock, automatic updates, and remote login. A missing tool or an unrecognized answer stays `unknown`. Windows currently answers the firewall check and leaves the others unknown.
+- **Provenance** classifies an execution. A regular file under `/usr/bin`, `/bin`, `/usr/sbin`, `/sbin`, `/usr/lib`, `/usr/libexec`, or `/System`, with a parent, is `allow` and is not logged. Anything else on macOS or Linux is `suspicious`. Windows is `unsupported`, not allow.
+- **Capability gate** refuses a signed remote action when the endpoint platform is Windows or unrecognized. macOS and Linux keep the existing action list.
+
+### Preserve
+
+An operator marks an enrolled macOS or Linux endpoint `lost`, `breached`, or `compromised` with a signed `preserve` action. The arguments are only `incident_id` and `reason`. The server records that mark, and the command channel delivers it to the endpoint. The endpoint packs `/etc/hosts`, `/etc/passwd`, `/etc/ssh/sshd_config`, and `/etc/crontab` when those files exist, skips symlinks, and uploads one gzip archive. The server keeps the archive only when the mark still matches that incident id. The event journal stores the incident id and the SHA-256, not the archive. `clear_preserve` stops a new collection and leaves an archive already stored. `GET /api/v1/preserve/bundles?endpoint_id=HW-host&incident_id=INC-10001` returns the archive to an admin or security operator in that tenant.
+
+Suspicious and exfiltrate activity is reported as `preserve_class` and does not start collection. A Darkscan allow, an Accord disagreement, and a suspicious DNS lookup are `suspicious`. A long high-entropy DNS label is `exfiltrate`. The endpoint id on the mark is the hardware id the agent uses, such as `HW-` plus the hostname. An inventory-only Windows reporter cannot be marked.
+
 ### Graphical Interface
 
 ```bash
@@ -455,6 +469,10 @@ GET /api/v1/bootstrap/artifacts/<sha256>
 
 Windows inventory (no JWT; one-time enrollment code in the body)
 POST /api/v1/inventory/windows
+
+Preserve (JWT, admin or security_operator)
+POST /api/v1/endpoints/action   action preserve or clear_preserve
+GET  /api/v1/preserve/bundles?endpoint_id=&incident_id=
 
 Organizations
 GET    /api/v1/organizations

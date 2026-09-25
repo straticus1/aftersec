@@ -43,7 +43,9 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager, glass *breakgl
 			log.Printf("remote command channel disabled: action verification key is unavailable or invalid")
 		} else {
 			quarantine := response.NewQuarantineManager(response.NewPlatformFirewall())
-			runner := response.NewSystemActionRunner(quarantine, 1<<20).WithBreakGlass(glass)
+			runner := response.NewSystemActionRunner(quarantine, 1<<20).WithBreakGlass(glass).WithPreserve(&preserveUploader{
+				client: grpcClient, tenant: cfg.TenantID, endpoint: "HW-" + hostnameOrUnknown(), root: "/",
+			})
 			socketPath := cfg.Daemon.DisplaySocket
 			if socketPath == "" {
 				socketPath = os.Getenv("AFTERSEC_DISPLAY_SOCKET")
@@ -101,6 +103,7 @@ func RunEnterprise(cfg *client.ClientConfig, mgr storage.Manager, glass *breakgl
 		}
 
 		publishCompliance(cfg, hwID, currentState, mgr)
+		publishExposure(mgr)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

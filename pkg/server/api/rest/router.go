@@ -17,6 +17,7 @@ import (
 	"aftersec/pkg/server/clamav"
 	"aftersec/pkg/server/displayframes"
 	grpcserver "aftersec/pkg/server/grpc"
+	"aftersec/pkg/server/preserve"
 	"aftersec/pkg/server/repository"
 	"aftersec/pkg/server/stolen"
 	"github.com/redis/go-redis/v9"
@@ -52,6 +53,8 @@ type Router struct {
 	actionAudit     RemoteActionAudit
 	frames          *displayframes.Store
 	stolen          *stolen.Registry
+	preserveReg     *preserve.Registry
+	preserveStore   *preserve.Store
 	bootstrap       *Bootstrap
 }
 
@@ -71,6 +74,11 @@ func (r *Router) SetDisplayFrames(store *displayframes.Store) {
 
 func (r *Router) SetStolenRegistry(reg *stolen.Registry) {
 	r.stolen = reg
+}
+
+func (r *Router) SetPreserve(reg *preserve.Registry, store *preserve.Store) {
+	r.preserveReg = reg
+	r.preserveStore = store
 }
 
 func (r *Router) SetBootstrap(b *Bootstrap) {
@@ -186,6 +194,7 @@ func NewRouter(jwtManager *auth.JWTManager, repos *repository.Repositories, ente
 	// MDM Remote Action — dispatches a command to the endpoint's active gRPC stream
 	mux.HandleFunc("/api/v1/endpoints/action", jwtManager.HTTPMiddleware(router.handleEndpointAction))
 	mux.HandleFunc("/api/v1/display/frames", jwtManager.HTTPMiddleware(router.handleDisplayFrame))
+	mux.HandleFunc("/api/v1/preserve/bundles", jwtManager.HTTPMiddleware(router.handlePreserveBundle))
 
 	// Sigma API
 	mux.HandleFunc("/api/v1/sigma/deploy", jwtManager.HTTPMiddleware(router.handleSigmaDeploy))

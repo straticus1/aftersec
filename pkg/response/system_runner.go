@@ -13,6 +13,7 @@ import (
 	"aftersec/pkg/breakglass"
 	"aftersec/pkg/display"
 	"aftersec/pkg/forensics"
+	"aftersec/pkg/preserve"
 )
 
 // SystemActionRunner executes the narrow, signed live-response allowlist.
@@ -30,12 +31,18 @@ type StolenCamera interface {
 	Disarm(context.Context) error
 }
 
+// Preserver uploads one evidence archive for a signed preserve mark.
+type Preserver interface {
+	Preserve(context.Context, string, string) error
+}
+
 type SystemActionRunner struct {
 	quarantine *QuarantineManager
 	maxBytes   int
 	glass      *breakglass.Guard
 	display    DisplayCapturer
 	stolen     StolenCamera
+	preserve   Preserver
 }
 
 func NewSystemActionRunner(quarantine *QuarantineManager, maxBytes int) *SystemActionRunner {
@@ -59,6 +66,13 @@ func (r *SystemActionRunner) WithDisplay(camera DisplayCapturer) *SystemActionRu
 func (r *SystemActionRunner) WithStolen(camera StolenCamera) *SystemActionRunner {
 	if r != nil {
 		r.stolen = camera
+	}
+	return r
+}
+
+func (r *SystemActionRunner) WithPreserve(p Preserver) *SystemActionRunner {
+	if r != nil {
+		r.preserve = p
 	}
 	return r
 }
@@ -160,6 +174,23 @@ func (r *SystemActionRunner) Run(ctx context.Context, action Action, args map[st
 			return nil, err
 		}
 		return []byte("stolen mark cleared"), nil
+	case ActionPreserve:
+		incident, reason, err := preserve.ParseMark(args)
+		if err != nil {
+			return nil, err
+		}
+		if r.preserve == nil {
+			return nil, fmt.Errorf("preserve is not configured")
+		}
+		if err = r.preserve.Preserve(ctx, incident, reason); err != nil {
+			return nil, err
+		}
+		return []byte("preserve stored"), nil
+	case ActionClearPreserve:
+		if len(args) != 0 {
+			return nil, fmt.Errorf("preserve clear takes no arguments")
+		}
+		return []byte("preserve cleared"), nil
 	default:
 		return nil, fmt.Errorf("unsupported remote action")
 	}

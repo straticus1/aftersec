@@ -19,6 +19,7 @@ import (
 	"aftersec/pkg/selfprotect"
 	"aftersec/pkg/server/auth"
 	"aftersec/pkg/server/displayframes"
+	"aftersec/pkg/server/preserve"
 	"aftersec/pkg/server/repository"
 	"aftersec/pkg/server/stolen"
 	"google.golang.org/grpc/codes"
@@ -46,6 +47,9 @@ type Server struct {
 	pendingDisplay   map[string]displayNote
 	stolen           *stolen.Registry
 	stolenMinter     StolenMinter
+	preserveReg      *preserve.Registry
+	preserveStore    *preserve.Store
+	preserveMinter   PreserveMinter
 }
 
 type displayNote struct {
@@ -291,6 +295,8 @@ func (s *Server) Heartbeat(ctx context.Context, req *grpcapi.HeartbeatRequest) (
 	action := "NONE"
 	if stolenAction := s.stolenAction(req.TenantId, req.HardwareId); stolenAction != "" {
 		action = stolenAction
+	} else if preserveAction := s.preserveAction(req.TenantId, req.HardwareId); preserveAction != "" {
+		action = preserveAction
 	}
 	if pack, ok := s.PendingSigmaPack(); ok {
 		encoded, err := detection.HeartbeatAction(pack)
@@ -336,6 +342,18 @@ func (s *Server) StreamEvents(stream grpcapi.EnterpriseService_StreamEventsServe
 			} else if stolenMessage == "" {
 				stolenMessage = "stolen camera rejected"
 			}
+		}
+		if event.EventType == "preserve_bundle" {
+			summary, stored := s.takePreserve(event)
+			event.Payload = summary
+			if stored {
+				stolenMessage = "preserve stored"
+			} else if stolenMessage == "" {
+				stolenMessage = "preserve rejected"
+			}
+		}
+		if event.EventType == "preserve_class" {
+			event.Payload = s.takePreserveClass(event)
 		}
 
 		if s.eventJournal != nil {
@@ -467,6 +485,7 @@ func (s *Server) ConnectCommandStream(stream grpcapi.EnterpriseService_ConnectCo
 	s.activeStreams[endpointID] = cmdChan
 	s.mu.Unlock()
 	s.deliverStolen(stream.Context(), tenantID, endpointID, cmdChan)
+	s.deliverPreserve(stream.Context(), tenantID, endpointID, cmdChan)
 
 	defer func() {
 		s.mu.Lock()

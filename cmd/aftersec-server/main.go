@@ -24,6 +24,7 @@ import (
 	"aftersec/pkg/server/database"
 	"aftersec/pkg/server/displayframes"
 	grpcserver "aftersec/pkg/server/grpc"
+	"aftersec/pkg/server/preserve"
 	"aftersec/pkg/server/repository"
 	"aftersec/pkg/server/stolen"
 	"aftersec/pkg/server/tlsconfig"
@@ -81,6 +82,32 @@ func openStolenRegistry() *stolen.Registry {
 	}
 	log.Print("stolen device marks will be recorded")
 	return reg
+}
+
+func openPreserve() (*preserve.Registry, *preserve.Store) {
+	dir := os.Getenv("AFTERSEC_PRESERVE_DIR")
+	explicit := dir != ""
+	if dir == "" {
+		dir = filepath.Join("data", "preserve")
+	}
+	reg, err := preserve.Open(dir)
+	if err != nil {
+		if explicit {
+			log.Fatalf("preserve registry: %v", err)
+		}
+		log.Printf("preserve disabled: %v", err)
+		return nil, nil
+	}
+	store, err := preserve.OpenStore(filepath.Join(dir, "bundles"))
+	if err != nil {
+		if explicit {
+			log.Fatalf("preserve store: %v", err)
+		}
+		log.Printf("preserve disabled: %v", err)
+		return nil, nil
+	}
+	log.Print("preserve marks will be recorded")
+	return reg, store
 }
 
 func openDisplayFrames() *displayframes.Store {
@@ -232,10 +259,12 @@ func main() {
 	frames := openDisplayFrames()
 	enterpriseSrv.SetDisplayFrames(frames)
 	stolenReg := openStolenRegistry()
+	preserveReg, preserveStore := openPreserve()
 	mux := rest.NewRouter(jwtManager, repos, enterpriseSrv, clamavStorage, clamavUpdater, darkscanClient, redisClient)
 	mux.SetActionAudit(repos.RemoteActionAudit)
 	mux.SetDisplayFrames(frames)
 	mux.SetStolenRegistry(stolenReg)
+	mux.SetPreserve(preserveReg, preserveStore)
 	if boot, err := openBootstrap(); err != nil {
 		log.Fatalf("bootstrap publisher: %v", err)
 	} else if boot != nil {
@@ -250,6 +279,7 @@ func main() {
 			minter := response.NewActionMinter(ed25519.PrivateKey(key), repos.Endpoints, 2*time.Minute, time.Now)
 			mux.SetActionMinter(minter)
 			enterpriseSrv.SetStolen(stolenReg, minter)
+			enterpriseSrv.SetPreserve(preserveReg, preserveStore, minter)
 			log.Println("Signed remote response enabled")
 		}
 	} else {

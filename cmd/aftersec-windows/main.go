@@ -168,6 +168,10 @@ func main() {
 		runReport(os.Args[2:])
 		return
 	}
+	if len(os.Args) == 2 && os.Args[1] == "exposure" {
+		runExposure()
+		return
+	}
 	if runtime.GOOS != "windows" {
 		fmt.Fprintln(os.Stderr, "This scanner requires Windows.")
 		os.Exit(2)

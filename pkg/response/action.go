@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"aftersec/pkg/preserve"
 )
 
 type Action string
@@ -24,6 +26,8 @@ const (
 	ActionDisplayRecord     Action = "display_record"
 	ActionMarkStolen        Action = "mark_stolen"
 	ActionClearStolen       Action = "clear_stolen"
+	ActionPreserve          Action = "preserve"
+	ActionClearPreserve     Action = "clear_preserve"
 )
 
 type ActionClaims struct {
@@ -127,8 +131,11 @@ func validClaims(c ActionClaims) bool {
 			}
 		}
 		return true
-	case ActionDisplayShot, ActionMarkStolen, ActionClearStolen:
+	case ActionDisplayShot, ActionMarkStolen, ActionClearStolen, ActionClearPreserve:
 		return len(c.Arguments) == 0
+	case ActionPreserve:
+		_, _, err := preserve.ParseMark(c.Arguments)
+		return err == nil
 	case ActionDisplayRecord:
 		_, err := ParseRecordSeconds(c.Arguments)
 		return err == nil

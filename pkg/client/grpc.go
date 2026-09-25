@@ -154,6 +154,27 @@ func (c *EnterpriseClient) SendStolenCamera(ctx context.Context, tenantID, hwID,
 	return ack.GetMessage() == "stolen camera stored" && ack.GetEventsProcessed() > 0, nil
 }
 
+// SendPreserve uploads one evidence archive. The server stores it only when
+// this endpoint is marked for that incident, and the journal keeps the stamp
+// rather than the archive. True means the server kept the archive.
+func (c *EnterpriseClient) SendPreserve(ctx context.Context, tenantID, hwID, payload string) (bool, error) {
+	stream, err := c.StreamEvents(ctx)
+	if err != nil {
+		return false, err
+	}
+	if err = stream.Send(&grpcapi.ClientEvent{
+		TenantId: tenantID, HardwareId: hwID, Timestamp: time.Now().Unix(),
+		EventType: "preserve_bundle", Payload: payload,
+	}); err != nil {
+		return false, err
+	}
+	ack, err := stream.CloseAndRecv()
+	if err != nil {
+		return false, err
+	}
+	return ack.GetMessage() == "preserve stored" && ack.GetEventsProcessed() > 0, nil
+}
+
 // ConnectCommandStream initiates the persistent bi-directional MDM queue
 func (c *EnterpriseClient) ConnectCommandStream(ctx context.Context) (grpcapi.EnterpriseService_ConnectCommandStreamClient, error) {
 	return c.grpcClient.ConnectCommandStream(ctx)

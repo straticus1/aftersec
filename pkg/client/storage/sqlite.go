@@ -12,6 +12,7 @@ import (
 
 	"aftersec/pkg/core"
 	"aftersec/pkg/eventjournal"
+	"aftersec/pkg/preserve"
 	"aftersec/pkg/reportmeta"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -251,6 +252,39 @@ func (m *SQLiteManager) LogTelemetryEvent(source, eventType, severity, details s
 		return fmt.Errorf("append telemetry journal: %w", err)
 	}
 	m.reportPersisted.Add(1)
+	_, err = m.db.Exec("INSERT INTO telemetry_events (timestamp, source, event_type, severity, details, journal_sequence) VALUES (?, ?, ?, ?, ?, ?)",
+		timestamp, source, eventType, severity, details, record.Sequence)
+	if err != nil {
+		return err
+	}
+	class, ok := preserve.Class(source, eventType)
+	if !ok {
+		return nil
+	}
+	notice, err := preserve.SealClass(class, source, eventType)
+	if err != nil {
+		return err
+	}
+	return m.writeTelemetryLocked(timestamp, "preserve", "preserve_class", "high", string(notice))
+}
+
+func (m *SQLiteManager) writeTelemetryLocked(timestamp time.Time, source, eventType, severity, details string) error {
+	payload, err := json.Marshal(struct {
+		BootID       string `json:"boot_id,omitempty"`
+		AgentVersion string `json:"agent_version"`
+		Timestamp    string `json:"timestamp"`
+		Source       string `json:"source"`
+		EventType    string `json:"event_type"`
+		Severity     string `json:"severity"`
+		Details      string `json:"details"`
+	}{reportmeta.BootID(), reportmeta.Version(), timestamp.Format(time.RFC3339Nano), source, eventType, severity, details})
+	if err != nil {
+		return fmt.Errorf("encode telemetry journal record: %w", err)
+	}
+	record, err := m.eventJournal.Append(payload)
+	if err != nil {
+		return fmt.Errorf("append telemetry journal: %w", err)
+	}
 	_, err = m.db.Exec("INSERT INTO telemetry_events (timestamp, source, event_type, severity, details, journal_sequence) VALUES (?, ?, ?, ?, ?, ?)",
 		timestamp, source, eventType, severity, details, record.Sequence)
 	return err
